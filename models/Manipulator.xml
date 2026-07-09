@@ -1,0 +1,14 @@
+<mujoco model="manipulator_disabled">
+  <compiler angle="radian"/>
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+
+  <asset>
+    <texture name="ground_grid" type="2d" builtin="checker" width="256" height="256" rgb1="0.38 0.56 0.88" rgb2="0.97 0.98 1.00"/>
+    <material name="ground_grid_mat" texture="ground_grid" texrepeat="4 4" texuniform="true" reflectance="0.08"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 2"/>
+    <geom name="floor" type="plane" size="1 1 0.01" material="ground_grid_mat"/>
+  </worldbody>
+</mujoco>

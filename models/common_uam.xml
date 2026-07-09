@@ -1,0 +1,62 @@
+<mujoco model="hex_uam_framework">
+  <compiler angle="radian"/>
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+
+  <asset>
+    <texture name="ground_grid" type="2d" builtin="checker" width="512" height="512" rgb1="0.38 0.56 0.88" rgb2="0.97 0.98 1.00"/>
+    <material name="ground_grid_mat" texture="ground_grid" texrepeat="10 10" texuniform="true" reflectance="0.08"/>
+    <material name="drone_mat" rgba="0.12 0.16 0.20 1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 4"/>
+    <geom name="floor" type="plane" size="5 5 0.02" material="ground_grid_mat"/>
+
+    <body name="drone" pos="0 0 1.5">
+      <freejoint name="drone_free"/>
+      <geom name="drone_panel_1" type="box" pos="0 0 0" euler="0 0 0" size="0.155 0.090 0.04" material="drone_mat" mass="0.50"/>
+      <geom name="drone_panel_2" type="box" pos="0 0 0" euler="0 0 1.0471975512" size="0.155 0.090 0.04" material="drone_mat" mass="0.50"/>
+      <geom name="drone_panel_3" type="box" pos="0 0 0" euler="0 0 -1.0471975512" size="0.155 0.090 0.04" material="drone_mat" mass="0.50"/>
+      <geom name="rotor1_arm" type="capsule" fromto="0 0 0 0.34 0 0" size="0.015" material="drone_mat" mass="0.03"/>
+      <geom name="rotor2_arm" type="capsule" fromto="0 0 0 0.17 0.294 0" size="0.015" material="drone_mat" mass="0.03"/>
+      <geom name="rotor3_arm" type="capsule" fromto="0 0 0 -0.17 0.294 0" size="0.015" material="drone_mat" mass="0.03"/>
+      <geom name="rotor4_arm" type="capsule" fromto="0 0 0 -0.34 0 0" size="0.015" material="drone_mat" mass="0.03"/>
+      <geom name="rotor5_arm" type="capsule" fromto="0 0 0 -0.17 -0.294 0" size="0.015" material="drone_mat" mass="0.03"/>
+      <geom name="rotor6_arm" type="capsule" fromto="0 0 0 0.17 -0.294 0" size="0.015" material="drone_mat" mass="0.03"/>
+
+      <body name="rotor1_body" pos="0.34 0 0">
+        <site name="rotor1_site" pos="0 0 0" size="0.01"/>
+        <geom type="cylinder" size="0.07 0.005" rgba="0.08 0.08 0.08 1" mass="0.01"/>
+      </body>
+      <body name="rotor2_body" pos="0.17 0.294 0">
+        <site name="rotor2_site" pos="0 0 0" size="0.01"/>
+        <geom type="cylinder" size="0.07 0.005" rgba="0.08 0.08 0.08 1" mass="0.01"/>
+      </body>
+      <body name="rotor3_body" pos="-0.17 0.294 0">
+        <site name="rotor3_site" pos="0 0 0" size="0.01"/>
+        <geom type="cylinder" size="0.07 0.005" rgba="0.08 0.08 0.08 1" mass="0.01"/>
+      </body>
+      <body name="rotor4_body" pos="-0.34 0 0">
+        <site name="rotor4_site" pos="0 0 0" size="0.01"/>
+        <geom type="cylinder" size="0.07 0.005" rgba="0.08 0.08 0.08 1" mass="0.01"/>
+      </body>
+      <body name="rotor5_body" pos="-0.17 -0.294 0">
+        <site name="rotor5_site" pos="0 0 0" size="0.01"/>
+        <geom type="cylinder" size="0.07 0.005" rgba="0.08 0.08 0.08 1" mass="0.01"/>
+      </body>
+      <body name="rotor6_body" pos="0.17 -0.294 0">
+        <site name="rotor6_site" pos="0 0 0" size="0.01"/>
+        <geom type="cylinder" size="0.07 0.005" rgba="0.08 0.08 0.08 1" mass="0.01"/>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="rotor1" site="rotor1_site" gear="0 0 1 0 0 0"/>
+    <motor name="rotor2" site="rotor2_site" gear="0 0 1 0 0 0"/>
+    <motor name="rotor3" site="rotor3_site" gear="0 0 1 0 0 0"/>
+    <motor name="rotor4" site="rotor4_site" gear="0 0 1 0 0 0"/>
+    <motor name="rotor5" site="rotor5_site" gear="0 0 1 0 0 0"/>
+    <motor name="rotor6" site="rotor6_site" gear="0 0 1 0 0 0"/>
+  </actuator>
+</mujoco>

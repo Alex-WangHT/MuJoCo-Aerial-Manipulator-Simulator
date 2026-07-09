@@ -1,0 +1,3 @@
+<mujoco model="uam_4cables">
+  <include file="common_uam.xml"/>
+</mujoco>

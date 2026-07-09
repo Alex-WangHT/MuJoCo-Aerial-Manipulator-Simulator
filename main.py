@@ -1,166 +1,92 @@
-#!/usr/bin/env python3
-"""
-MuJoCo-MAVLink Bridge - Main Entry Point
+from __future__ import annotations
 
-Simple architecture:
-- MAVLink → Plant: Control inputs (u)
-- Plant → MAVLink: State feedback (x)
-"""
-
-import time
 import argparse
-import sys
-import logging
+import threading
+import tkinter as tk
+from collections.abc import Callable
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+import numpy as np
 
-from src import (
-    Simulator,
-    SimulatorConfig,
-    ControlSource,
-    ControlMapping,
-    StateVector,
-)
+from include.Telemetry import TelemetryBuffer
+from src.GroundControlStation import GCS
+from src.MujocoSimulation import MujocoSimulation
+from src.drone import DroneControlInput, DroneControllerInterface
 
 
-def create_arg_parser():
-    parser = argparse.ArgumentParser(
-        description="MuJoCo-MAVLink Bridge",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Architecture:
-  MAVLink (control inputs u)  ──►  Plant (simulation)
-  MAVLink (state feedback x)  ◄──  Plant (simulation)
-
-Examples:
-  # Run with default settings
-  python main.py
-  
-  # Custom connection
-  python main.py --host 0.0.0.0 --port 14540
-  
-  # Faster simulation
-  python main.py --rtf 10.0
-  
-  # Load custom model
-  python main.py --model path/to/robot.xml
-        """
-    )
-    
-    parser.add_argument("--host", "-H", type=str, default="0.0.0.0",
-                        help="MAVLink listen host (default: 0.0.0.0)")
-    parser.add_argument("--port", "-p", type=int, default=14540,
-                        help="MAVLink listen port (default: 14540)")
-    parser.add_argument("--model", "-m", type=str, default=None,
-                        help="Path to MuJoCo model XML file")
-    parser.add_argument("--rtf", "--real-time-factor", type=float, default=1.0,
-                        help="Real-time factor (default: 1.0)")
-    parser.add_argument("--no-auto-start", action="store_true",
-                        help="Don't start automatically")
-    parser.add_argument("--verbose", "-v", action="store_true",
-                        help="Verbose output")
-    
-    return parser
+FIXED_THRUST_PER_ROTOR = 3
 
 
-def setup_callbacks(simulator: Simulator, verbose: bool = False):
-    state_count = [0]
-    
-    def on_state_update(state: StateVector):
-        state_count[0] += 1
-        
-        if state_count[0] % 100 == 0:
-            stats = simulator.get_statistics()
-            joint_info = []
-            for name, pos in state.joint_positions.items():
-                vel = state.joint_velocities.get(name, 0.0)
-                joint_info.append(f"{name}: pos={pos:.3f}, vel={vel:.3f}")
-            
-            print(f"Step {stats['steps']}: {', '.join(joint_info[:2])}")
-    
-    simulator.set_on_state_update(on_state_update)
-    
-    if verbose:
-        def on_control_received(controls):
-            for source, values in controls.items():
-                print(f"Received {source.value}: {values[:4]}")
-        
-        simulator.set_on_control_received(on_control_received)
+class OpenLoopFixedThrustController(DroneControllerInterface):
+    def __init__(
+        self,
+        shutdownEvent: threading.Event,
+        rotorCount: int = 6,
+        fixedThrustPerRotor: float = FIXED_THRUST_PER_ROTOR,
+    ):
+        super().__init__(shutdownEvent)
+        self._rotorCount = rotorCount
+        self._fixedThrustPerRotor = fixedThrustPerRotor
+
+    def run(self) -> None:
+        print("[OpenLoopFixedThrustController] Initialized.")
+        while not self._shutdownEvent.is_set():
+            self.waitForUpdate(timeout=0.05)
+            self.setControlInput(self.computeControl())
+        print("[OpenLoopFixedThrustController] Shutting down.")
+
+    def computeControl(self) -> DroneControlInput:
+        u = np.full(self._rotorCount, max(0.0, self._fixedThrustPerRotor), dtype=float)
+        return DroneControlInput(u=u)
 
 
-def main():
-    parser = create_arg_parser()
+def buildDefaultDroneController(shutdownEvent: threading.Event) -> DroneControllerInterface:
+    return OpenLoopFixedThrustController(shutdownEvent)
+
+
+def main(
+    droneControllerFactory: Callable[[threading.Event], DroneControllerInterface] | None = None,
+) -> None:
+    parser = argparse.ArgumentParser(description="DroneControllerInterface MuJoCo test.")
+    parser.add_argument("--model", default="models/common_uam.xml")
+    parser.add_argument("--nogui", action="store_true", help="Run without GCS telemetry window.")
     args = parser.parse_args()
-    
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-    
-    print("=" * 60)
-    print("MuJoCo-MAVLink Bridge")
-    print("=" * 60)
-    print(f"MAVLink: {args.host}:{args.port}")
-    print(f"Real-time factor: {args.rtf}")
-    if args.model:
-        print(f"Model: {args.model}")
-    print("=" * 60)
-    print("\nArchitecture:")
-    print("  MAVLink ──► Plant  (control inputs)")
-    print("  MAVLink ◄── Plant  (state feedback)")
-    print("=" * 60)
-    
-    config = SimulatorConfig(
-        mavlink_host=args.host,
-        mavlink_port=args.port,
-        real_time_factor=args.rtf,
-        model_path=args.model,
+
+    shutdownEvent = threading.Event()
+    telemetryBuffer = TelemetryBuffer()
+    controllerFactory = droneControllerFactory or buildDefaultDroneController
+    droneController = controllerFactory(shutdownEvent)
+    mujocoSim = MujocoSimulation(
+        shutdownEvent,
+        droneController=droneController,
+        modelPath=args.model,
+        telemetryBuffer=telemetryBuffer,
     )
-    
-    print("\nInitializing simulator...")
-    simulator = Simulator(config=config)
-    
-    control_names = simulator.plant.control_names
-    joint_names = simulator.plant.joint_names
-    
-    print(f"Plant initialized:")
-    print(f"  Control inputs: {control_names}")
-    print(f"  Joints: {joint_names}")
-    
-    print("\nControl mappings (MAVLink index → Plant control):")
-    for entry in simulator.control_mapping.entries:
-        print(f"  {entry.mavlink_source.value}[{entry.mavlink_index}] → {entry.plant_control_name}")
-    
-    setup_callbacks(simulator, args.verbose)
-    
-    if not args.no_auto_start:
-        print("\nConnecting MAVLink interface...")
-        simulator.connect()
-        
-        print("Starting simulator...")
-        print("Press Ctrl+C to stop\n")
-        
-        simulator.start()
-        
-        try:
-            while True:
-                time.sleep(1.0)
-                stats = simulator.get_statistics()
-                print(f"[Stats] Steps: {stats['steps']}, "
-                      f"Controls received: {stats['controls_received']}, "
-                      f"States sent: {stats['states_sent']}, "
-                      f"FPS: {stats['steps_per_second']:.1f}")
-        except KeyboardInterrupt:
-            print("\n\nStopping simulator...")
-            simulator.stop()
-            print("Simulator stopped.")
-    else:
-        print("\nSimulation not started (--no-auto-start flag)")
-        print("Use simulator.start() to begin")
-    
-    return simulator
+
+    print(
+        f"[Main] Using drone controller: {type(droneController).__name__} "
+        f"with fixed thrust {FIXED_THRUST_PER_ROTOR:.2f} N per rotor."
+    )
+    droneController.start()
+    mujocoSim.start()
+
+    try:
+        if args.nogui:
+            while mujocoSim.is_alive() and not shutdownEvent.is_set():
+                mujocoSim.join(timeout=0.25)
+        else:
+            root = tk.Tk()
+            GCS(root, taskManager=None, shutdownEvent=shutdownEvent, telemetryBuffer=telemetryBuffer)
+            root.mainloop()
+    except KeyboardInterrupt:
+        shutdownEvent.set()
+    finally:
+        mujocoSim.stop()
+        if mujocoSim.is_alive():
+            mujocoSim.join(timeout=1.0)
+        droneController.stop()
+        if droneController.is_alive():
+            droneController.join(timeout=1.0)
 
 
 if __name__ == "__main__":
-    sim = main()
+    main()
