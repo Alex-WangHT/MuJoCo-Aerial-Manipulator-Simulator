@@ -1,109 +1,110 @@
+"""仿真线程。
+
+主循环：Environment.step -> Multirotor.get_state -> droneController.setSensorData
+（若有控制器）-> TelemetryBuffer.append（若有遥测）；支持被动 viewer 与无头模式，
+支持时钟漂移补偿的软实时；无 mujoco 时退化为 clock-only 模式。
+"""
+
 from __future__ import annotations
 
-import math
-import pathlib
 import threading
 import time
 
 import numpy as np
 
-from include.Messages import SensorData
-from include.Telemetry import TelemetryBuffer
-from src.Robot import Robot
-
 try:
     import mujoco
-    import mujoco.viewer
-except Exception:  # pragma: no cover - allows framework use before installing mujoco.
+except Exception:  # pragma: no cover
     mujoco = None
+
+from .Messages import SensorData
+from .Telemetry import TelemetryBuffer
+
+from ..AerialManipulator import AerialManipulator
+from ..Environment import Environment
 
 
 class MujocoSimulation(threading.Thread):
-    """MuJoCo 仿真线程。
+    """MuJoCo 仿真线程（仿真整体打包）。
 
-    职责：
-    - 加载 MJCF 模型并启动 passive viewer
-    - 每帧从 ``Robot`` 提取状态，推给 ``DroneControllerInterface``
-    - 从控制器读取控制输出，通过 ``Robot`` 写入 MuJoCo actuator
-    - 向 ``TelemetryBuffer`` 写入遥测数据
-    - 调用 ``mujoco.mj_step()`` 推进仿真
+    主循环每帧推进 1 个物理步（1 ms），按 realTimeFactor 调速：
+
+        sensor = Multirotor.get_state()
+        -> droneController.setSensorData(sensor)   （若有控制器）
+        -> TelemetryBuffer.append(...)             （若有遥测）
+        -> Multirotor.set_thrusts(u)               （控制器输出，否则固定/悬停推力）
+        -> Environment.step()
     """
 
     def __init__(
         self,
         shutdownEvent: threading.Event,
-        modelPath: str | None = None,
-        timestep: float = 0.001,
+        environmentPath: str | None = None,
         telemetryBuffer: TelemetryBuffer | None = None,
+        droneController=None,
+        manipulatorController=None,
         fixedRotorThrust: float | None = None,
+        jointTargets=None,
+        useViewer: bool = True,
+        realTimeFactor: float = 1.0,
     ):
         super().__init__(daemon=True)
         self._shutdownEvent = shutdownEvent
-        self._timestep = timestep
-        self._modelPath = pathlib.Path(modelPath or "models/common_uam.xml")
+        self._environmentPath = environmentPath
         self._telemetryBuffer = telemetryBuffer
+        self._droneController = droneController          # 显式注入，可为 None
+        self._manipulatorController = manipulatorController  # 显式注入，可为 None
         self._fixedRotorThrust = fixedRotorThrust
-        self._model = None
-        self._data = None
-        self._robot: Robot | None = None
+        self._jointTargets = (
+            None if jointTargets is None else np.asarray(jointTargets, dtype=float).reshape(-1)
+        )
+        self._useViewer = useViewer
+        self._rtf = max(1e-6, float(realTimeFactor))
 
-    def run(self):
-        print("[MujocoSimulation] Initialized.")
+        self.env: Environment | None = None
+        self.uam: AerialManipulator | None = None
+
+    # ---------- 组装 ----------
+
+    def _build(self) -> None:
+        """构建场景并把机器人挂进去统一编译，随后绑定注入的控制器。"""
+        self.env = Environment(self._environmentPath)
+        self.uam = AerialManipulator(compileModel=False)
+        self.env.attach_robot(self.uam)
+        # 两段式控制器：模型编译完成后回调 bind()，由控制器自省几何/质量
+        if hasattr(self._droneController, "bind"):
+            self._droneController.bind(self.uam.multirotor)
+        if self._manipulatorController is not None:
+            self._manipulatorController.bind(self.uam.manipulator)
+        if self._jointTargets is not None and self._manipulatorController is None:
+            self.uam.manipulator.set_joint_targets(self._jointTargets)
+
+    # ---------- 线程入口 ----------
+
+    def run(self) -> None:
         if mujoco is None:
-            print(
-                "[MujocoSimulation] mujoco package not installed; "
-                "running clock-only sensor loop."
-            )
+            print("[MujocoSimulation] mujoco 未安装，进入 clock-only 空转模式。")
             self._runWithoutMujoco()
             return
 
-        self._model = mujoco.MjModel.from_xml_path(str(self._modelPath))
-        self._data = mujoco.MjData(self._model)
-        self._robot = Robot(self._model, self._data)
+        self._build()
         self._printDiagnostics()
-        self._launchViewer()
-        print("[MujocoSimulation] Ending simulation.")
 
-    # ---------- fallback loop (no mujoco) ----------
+        if self._useViewer:
+            self._launchViewer()
+        else:
+            self._runHeadless()
+        print("[MujocoSimulation] 仿真结束。")
 
-    def _runWithoutMujoco(self) -> None:
-        timestamp = 0.0
-        position = np.zeros(3)
-        velocity = np.zeros(3)
-        while not self._shutdownEvent.is_set():
-            sensor = SensorData(
-                timestamp=timestamp,
-                timestep=self._timestep,
-                dronePosition=position,
-                droneVelocity=velocity,
-            )
-            if self._telemetryBuffer is not None:
-                self._telemetryBuffer.append(timestamp, position, np.zeros(3))
-            if self._droneController is not None:
-                self._droneController.setSensorData(sensor)
-                self._droneController.setUpdateEvent()
-            time.sleep(self._timestep)
-            timestamp += self._timestep
+    def stop(self) -> None:
+        self._shutdownEvent.set()
 
-    # ---------- main sim loop ----------
+    # ---------- 主循环 ----------
 
-    def _launchViewer(self) -> None:
-        assert mujoco is not None
-        assert self._robot is not None
-        with mujoco.viewer.launch_passive(self._model, self._data) as viewer:
-            while viewer.is_running() and not self._shutdownEvent.is_set():
-                loop_start = time.perf_counter()
-                self._sendSensorData()
-                self._applyControl()
-                mujoco.mj_step(self._model, self._data)
-                viewer.sync()
-                sleep_duration = self._timestep - (time.perf_counter() - loop_start)
-                if sleep_duration > 0:
-                    time.sleep(sleep_duration)
-
-    def _sendSensorData(self) -> None:
-        assert self._robot is not None
-        sensor = self._robot.getSensorData()
+    def _frame(self) -> None:
+        """单帧：传感 -> 控制器/遥测 -> 控制写入 -> 物理步进。"""
+        assert self.env is not None and self.uam is not None
+        sensor = self.uam.multirotor.get_state()
 
         if self._droneController is not None:
             self._droneController.setSensorData(sensor)
@@ -113,53 +114,81 @@ class MujocoSimulation(threading.Thread):
                 sensor.timestamp, sensor.dronePosition, sensor.droneOrientation
             )
 
-    def _applyControl(self) -> None:
-        assert self._robot is not None
-        actions: dict[str, float] = {}
+        if self._droneController is not None:
+            u = np.asarray(self._droneController.getControlInput().u, dtype=float).reshape(-1)
+        else:
+            # 无控制器：固定推力；缺省为整机悬停推力
+            thrust = (
+                self._fixedRotorThrust
+                if self._fixedRotorThrust is not None
+                else self.uam.hover_thrust()
+            )
+            u = np.full(self.uam.multirotor.n_rotors, thrust)
 
-        if self._fixedRotorThrust is not None:
-            # 按 rotor1..rotor6 硬编码映射
-            for i in range(1, 7):
-                actions[f"rotor{i}"] = self._fixedRotorThrust
-        elif self._droneController is not None:
-            control_input = self._droneController.getControlInput()
-            u = np.asarray(control_input.u, dtype=float).reshape(-1)
-            for i, value in enumerate(u):
-                actions[f"rotor{i + 1}"] = float(value)
+        self.uam.multirotor.set_thrusts(u)
+        if self._manipulatorController is not None:
+            self._manipulatorController.update()
+        self.env.step()
 
-        self._robot.applyControl(actions)
+    def _launchViewer(self) -> None:
+        import mujoco.viewer  # 延迟导入：无显示环境下不影响无头模式
 
-    def stop(self) -> None:
-        self._shutdownEvent.set()
+        with mujoco.viewer.launch_passive(self.env.model, self.env.data) as viewer:
+            while viewer.is_running() and not self._shutdownEvent.is_set():
+                loop_start = time.perf_counter()
+                self._frame()
+                viewer.sync()
+                self._pace(loop_start)
 
-    # ---------- diagnostics ----------
+    def _runHeadless(self) -> None:
+        while not self._shutdownEvent.is_set():
+            loop_start = time.perf_counter()
+            self._frame()
+            self._pace(loop_start)
+
+    def _pace(self, loop_start: float) -> None:
+        """按 realTimeFactor 把每帧对齐到物理步长的墙钟时间。"""
+        frame_wall = float(self.env.model.opt.timestep) / self._rtf
+        remaining = frame_wall - (time.perf_counter() - loop_start)
+        if remaining > 0:
+            time.sleep(remaining)
+
+    # ---------- 降级模式（无 mujoco） ----------
+
+    def _runWithoutMujoco(self) -> None:
+        timestamp = 0.0
+        timestep = 0.001
+        position = np.zeros(3)
+        euler = np.zeros(3)
+        while not self._shutdownEvent.is_set():
+            sensor = SensorData(timestamp=timestamp, timestep=timestep)
+            if self._telemetryBuffer is not None:
+                self._telemetryBuffer.append(timestamp, position, euler)
+            if self._droneController is not None:
+                self._droneController.setSensorData(sensor)
+                self._droneController.setUpdateEvent()
+            time.sleep(timestep)
+            timestamp += timestep
+
+    # ---------- 诊断 ----------
 
     def _printDiagnostics(self) -> None:
-        if mujoco is None or self._model is None or self._data is None:
-            return
-        mujoco.mj_forward(self._model, self._data)
-        total_mass = float(np.sum(self._model.body_mass))
-        rotor_count = 6
-        hover_thrust = total_mass * 9.81 / rotor_count
-        try:
-            drone_body_id = self._model.body("drone").id
-            drone_com = self._data.subtree_com[drone_body_id].copy()
-        except Exception:
-            drone_com = np.zeros(3)
+        assert self.env is not None and self.uam is not None
+        model = self.env.model
+        total_mass = float(model.body_mass.sum())
+        state = self.uam.multirotor.get_state()
 
+        print(f"[MujocoSimulation] 场景 geom 数: {model.ngeom}, 障碍物: {sorted(self.env.obstacles)}")
+        print(f"[MujocoSimulation] 整机质量: {total_mass:.3f} kg, 悬停推力: {self.uam.hover_thrust():.3f} N/rotor")
+        print(f"[MujocoSimulation] 出生位置: {np.round(state.dronePosition, 3)}")
+
+        drone_com = self.env.data.subtree_com[self.uam.multirotor.body_id].copy()
         rotor_positions = []
-        for i in range(1, rotor_count + 1):
-            try:
-                site_id = self._model.site(f"rotor{i}_site").id
-                rotor_positions.append(self._data.site_xpos[site_id].copy())
-            except Exception:
-                pass
-
-        print(f"[MujocoSimulation] Total model mass: {total_mass:.3f} kg")
-        print(f"[MujocoSimulation] Hover thrust estimate: {hover_thrust:.3f} N per rotor")
-        print(f"[MujocoSimulation] Drone subtree COM: {drone_com}")
+        for rotor_name in self.uam.multirotor.rotor_names:
+            site_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_SITE, rotor_name + "_site")
+            if site_id >= 0:
+                rotor_positions.append(self.env.data.site_xpos[site_id].copy())
         if rotor_positions:
             rotor_center = np.mean(np.vstack(rotor_positions), axis=0)
-            offset = drone_com - rotor_center
-            print(f"[MujocoSimulation] Rotor center: {rotor_center}")
-            print(f"[MujocoSimulation] COM - rotor center offset: {offset}")
+            print(f"[MujocoSimulation] COM - 旋翼中心偏移: {np.round(drone_com - rotor_center, 4)}")
+

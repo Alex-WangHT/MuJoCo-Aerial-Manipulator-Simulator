@@ -1,14 +1,49 @@
-<mujoco model="manipulator_disabled">
-  <compiler angle="radian"/>
-  <option timestep="0.001" gravity="0 0 -9.81"/>
+<mujoco model="manipulator">
+  <!--
+    二自由度机械臂（Manipulator），初始姿态自然下垂（-Z）。
 
-  <asset>
-    <texture name="ground_grid" type="2d" builtin="checker" width="256" height="256" rgb1="0.38 0.56 0.88" rgb2="0.97 0.98 1.00"/>
-    <material name="ground_grid_mat" texture="ground_grid" texrepeat="4 4" texuniform="true" reflectance="0.08"/>
-  </asset>
+    本文件是“子模型”：由 AerialManipulator 通过 mjSpec.attach 挂到
+    multirotor.xml 的 manipulator_mount site 上，attach 后所有名称带前缀（默认 arm/）。
+
+    约定（供 src/Manipulator.py 按名称/前缀自省）：
+    - 关节:       joint1, joint2（hinge，绕机体 Y 轴俯仰）
+    - 舵机:       与关节同名（<position joint="jointN">，名称自动同为 arm/jointN）
+    - 末端 site:   ee_site
+    - 传感器:     jointposN / jointvelN / ee_pos / ee_quat
+
+    注意：作为子模型不要声明 <option>/<size> 或地板/灯光——编译时以父模型为准。
+  -->
+  <compiler angle="radian"/>
 
   <worldbody>
-    <light pos="0 0 2"/>
-    <geom name="floor" type="plane" size="1 1 0.01" material="ground_grid_mat"/>
+    <body name="arm_base" pos="0 0 0">
+      <geom name="arm_base_geom" type="cylinder" size="0.03 0.015" mass="0.05" rgba="0.55 0.55 0.60 1"/>
+
+      <body name="link1" pos="0 0 -0.02">
+        <joint name="joint1" type="hinge" axis="0 1 0" pos="0 0 0" damping="0.05" range="-1.8 1.8"/>
+        <geom name="link1_geom" type="capsule" fromto="0 0 0 0 0 -0.15" size="0.012" mass="0.09" rgba="0.85 0.43 0.13 1"/>
+
+        <body name="link2" pos="0 0 -0.15">
+          <joint name="joint2" type="hinge" axis="0 1 0" pos="0 0 0" damping="0.05" range="-1.8 1.8"/>
+          <geom name="link2_geom" type="capsule" fromto="0 0 0 0 0 -0.12" size="0.010" mass="0.06" rgba="0.90 0.62 0.30 1"/>
+          <site name="ee_site" pos="0 0 -0.12" size="0.008" rgba="1 0 0 1"/>
+        </body>
+      </body>
+    </body>
   </worldbody>
+
+  <actuator>
+    <!-- 位置舵机：ctrl = 目标关节角 [rad]；kp/kv 为伺服刚度/阻尼，forcerange 限制输出力矩 [N·m] -->
+    <position name="joint1" joint="joint1" kp="8" kv="0.5" ctrlrange="-1.8 1.8" forcerange="-1.5 1.5"/>
+    <position name="joint2" joint="joint2" kp="6" kv="0.4" ctrlrange="-1.8 1.8" forcerange="-1.0 1.0"/>
+  </actuator>
+
+  <sensor>
+    <jointpos name="jointpos1" joint="joint1"/>
+    <jointpos name="jointpos2" joint="joint2"/>
+    <jointvel name="jointvel1" joint="joint1"/>
+    <jointvel name="jointvel2" joint="joint2"/>
+    <framepos name="ee_pos" objtype="site" objname="ee_site"/>
+    <framequat name="ee_quat" objtype="site" objname="ee_site"/>
+  </sensor>
 </mujoco>
