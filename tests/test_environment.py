@@ -20,7 +20,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from src.MujocoSimulation import AerialManipulator, Environment
+from src import AerialManipulator, Environment
 
 
 def main() -> None:

@@ -21,7 +21,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from src.MujocoSimulation import MujocoSimulation, TelemetryBuffer
+from src import MujocoSimulation, TelemetryBuffer
 
 
 def run_sim(seconds: float, **kwargs) -> tuple[MujocoSimulation, TelemetryBuffer]:

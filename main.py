@@ -26,8 +26,8 @@ import argparse
 import threading
 import time
 
-from src.MujocoSimulation import TelemetryBuffer
-from src.MujocoSimulation import (
+from src import TelemetryBuffer
+from src import (
     ManipulatorController,
     MujocoSimulation,
     MultirotorController,
