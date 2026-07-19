@@ -4,9 +4,10 @@
     .venv/Scripts/python tests/test_simulation.py
 
 验证内容：
-1. 默认（悬停推力）无头运行 1 s：遥测按 ~1 kHz 记录，高度保持 1.5 m；
-2. 固定推力 4.0 N（> 悬停值）：无人机应上升；
-3. 固定推力 0：无人机应下落（并由机械臂触地支撑）；
+1. 闭环悬停无头运行 1 s：遥测按 ~1 kHz 记录，高度保持 1.5 m；
+   （SO-ARM100 网格臂质心偏离关节轴线，开环悬停物理上不可行，故用位置闭环）
+2. 位置闭环上升到 2.0 m；
+3. 固定推力 0：无人机应下落（并由机械臂/机体触地支撑）；
 4. stop() 后线程正常退出。
 """
 
@@ -21,7 +22,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from src import MujocoSimulation, TelemetryBuffer
+from src import MujocoSimulation, MultirotorController, TelemetryBuffer
 
 
 def run_sim(seconds: float, **kwargs) -> tuple[MujocoSimulation, TelemetryBuffer]:
@@ -40,9 +41,9 @@ def main() -> None:
     print("MujocoSimulation 无头仿真测试")
     print("=" * 64)
 
-    # ---------- 1. 默认悬停 1 s ----------
-    print("\n[1] 默认悬停推力，无头运行 1 s")
-    sim, telemetry = run_sim(1.0)
+    # ---------- 1. 闭环悬停 1 s ----------
+    print("\n[1] 位置闭环悬停（目标 z=1.5 m），无头运行 1 s")
+    sim, telemetry = run_sim(1.0, droneController=MultirotorController(targetPosition=[0.0, 0.0, 1.5]))
     assert not sim.is_alive(), "stop 后线程应退出"
     assert sim.env is not None and sim.uam is not None, "场景与机器人应已构建"
     time_arr, positions, eulers = telemetry.snapshot()
@@ -55,12 +56,12 @@ def main() -> None:
     assert abs(final_z - 1.5) < 0.1, f"悬停高度应保持 1.5 m，实际 {final_z:.3f}"
     assert np.max(np.abs(final_rpy_deg[:2])) < 3.0, "姿态应近水平"
 
-    # ---------- 2. 固定推力 4.0 N -> 上升 ----------
-    print("\n[2] 固定推力 4.0 N（> 悬停 3.17 N），0.8 s")
-    _, telemetry_up = run_sim(0.8, fixedRotorThrust=4.0)
+    # ---------- 2. 位置闭环上升到 2.0 m ----------
+    print("\n[2] 位置闭环上升（目标 z=2.0 m），1.5 s")
+    _, telemetry_up = run_sim(1.5, droneController=MultirotorController(targetPosition=[0.0, 0.0, 2.0]))
     _, pos_up, _ = telemetry_up.snapshot()
     print(f"    末端高度: {pos_up[-1][2]:.4f} m（初始 1.5 m）")
-    assert pos_up[-1][2] > 1.6, f"推力大于悬停值应上升，实际 {pos_up[-1][2]:.3f}"
+    assert pos_up[-1][2] > 1.6, f"闭环爬升应到达 2.0 m 附近，实际 {pos_up[-1][2]:.3f}"
 
     # ---------- 3. 固定推力 0 -> 下落 ----------
     print("\n[3] 固定推力 0，0.8 s")

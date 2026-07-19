@@ -18,6 +18,7 @@
 数据载体:
 - ``Messages``   SensorData / Command / ControlInput
 - ``Telemetry``  TelemetryBuffer（线程安全遥测环形缓冲，GCS 读取端）
+- ``TelemetryPublisher``  跨进程遥测通道（UDP+JSON 独立线程，非阻塞）
 
 分层调用关系::
 
@@ -53,6 +54,7 @@ def quaternionToEuler(q) -> np.ndarray:
 
 from .Messages import Command, ControlInput, SensorData  # noqa: E402
 from .Telemetry import TelemetryBuffer  # noqa: E402
+from .TelemetryPublisher import TelemetryPublisher  # noqa: E402
 from .Multirotor import Multirotor  # noqa: E402
 from .Manipulator import Manipulator  # noqa: E402
 from .AerialManipulator import AerialManipulator  # noqa: E402
@@ -73,5 +75,6 @@ __all__ = [
     "Command",
     "ControlInput",
     "TelemetryBuffer",
+    "TelemetryPublisher",
     "quaternionToEuler",
 ]

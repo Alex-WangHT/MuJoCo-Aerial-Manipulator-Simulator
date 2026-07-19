@@ -20,7 +20,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from src import AerialManipulator, Environment
+from src import AerialManipulator, Environment, MultirotorController
 
 
 def main() -> None:
@@ -65,11 +65,16 @@ def main() -> None:
     for name, pos in sorted(obstacle_positions.items()):
         print(f"    {name}: {np.round(pos, 3)}")
 
-    # ---------- 4. 场景中悬停 0.5 s ----------
-    print("\n[4] 场景中悬停（0.5 s）")
-    uam.multirotor.set_thrusts(np.full(uam.multirotor.n_rotors, uam.hover_thrust()))
-    uam.manipulator.set_joint_targets([0.0, 0.0])
-    env.step(500)
+    # ---------- 4. 场景中闭环悬停 0.5 s ----------
+    print("\n[4] 场景中闭环悬停（0.5 s）")
+    drone_ctrl = MultirotorController(targetPosition=[0.0, 0.0, 1.5])
+    drone_ctrl.bind(uam.multirotor)
+    uam.manipulator.set_joint_targets([0.0, 0.0, 0.0])
+    for _ in range(500):
+        sensor = uam.multirotor.get_state()
+        drone_ctrl.setSensorData(sensor)
+        uam.multirotor.set_thrusts(drone_ctrl.getControlInput().u)
+        env.step()
     state = uam.multirotor.get_state()
     print(f"    t=0.5s 高度: {state.dronePosition[2]:.4f} m, 姿态[deg]: {np.round(np.rad2deg(state.droneOrientation), 2)}")
     assert abs(state.dronePosition[2] - 1.5) < 0.1, "悬停 0.5 s 高度应保持"

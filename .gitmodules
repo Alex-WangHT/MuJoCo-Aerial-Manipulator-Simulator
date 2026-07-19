@@ -1,3 +1,0 @@
-[submodule "src/px4"]
-	path = src/px4
-	url = git@github.com:Alex-WangHT/PX4-Autopilot.git

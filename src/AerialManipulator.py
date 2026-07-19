@@ -23,9 +23,12 @@ class AerialManipulator:
     """空中机械臂（UAM）机器人组合器。
 
     职责：
-    - 分别加载多旋翼平台与机械臂两份 MJCF（``multirotor.xml`` / ``Manipulator.xml``）
-    - 以平台 MJCF 中声明的挂载点 site（默认 ``manipulator_mount``，位于机体系）
-      作为机械臂的固连位置，通过 ``mjSpec.attach`` 组合机器人 spec
+    - 加载多旋翼平台 MJCF（``multirotor.xml``）；``withManipulator=True``（默认）
+      时再加载机械臂 MJCF（``Manipulator.xml``），以平台 MJCF 中声明的挂载点
+      site（默认 ``manipulator_mount``，位于机体系）作为固连位置，通过
+      ``mjSpec.attach`` 组合机器人 spec；
+    - ``withManipulator=False`` 时为纯多旋翼构型：不加载机械臂，
+      编译后 ``manipulator`` 视图为 ``None``；
     - 两种使用方式：
 
       1. 独立运行（默认 ``compileModel=True``）：立即编译出共享
@@ -42,20 +45,23 @@ class AerialManipulator:
         mountSite: str = Multirotor.MOUNT_SITE_NAME,
         armPrefix: str = "arm/",
         compileModel: bool = True,
+        withManipulator: bool = True,
     ):
         if mujoco is None:
             raise ImportError("AerialManipulator 需要 mujoco 包，请先 pip install mujoco")
 
         platform_path = pathlib.Path(multirotorPath) if multirotorPath else _MODELS_DIR / "multirotor.xml"
-        arm_path = pathlib.Path(manipulatorPath) if manipulatorPath else _MODELS_DIR / "Manipulator.xml"
-
         platform_spec = mujoco.MjSpec.from_file(str(platform_path))
-        arm_spec = mujoco.MjSpec.from_file(str(arm_path))
 
         # 挂载点位姿声明在 multirotor.xml 的 drone 机体系内，attach 后机械臂
         # worldbody 转换为固连在该 site 上的 frame，子模型名称自动加前缀
-        self._attach_frame = platform_spec.attach(arm_spec, site=mountSite, prefix=armPrefix)
-        self._arm_prefix = armPrefix
+        self._arm_prefix = armPrefix if withManipulator else None
+        if withManipulator:
+            arm_path = pathlib.Path(manipulatorPath) if manipulatorPath else _MODELS_DIR / "Manipulator.xml"
+            arm_spec = mujoco.MjSpec.from_file(str(arm_path))
+            self._attach_frame = platform_spec.attach(arm_spec, site=mountSite, prefix=armPrefix)
+        else:
+            self._attach_frame = None
 
         self.spec = platform_spec
         self.model = None
@@ -81,11 +87,21 @@ class AerialManipulator:
 
         由独立模式的 ``compile()`` 或 ``Environment.attach_robot()`` 调用；
         ``namespace`` 为场景 attach 时使用的前缀（如 ``uam/``）。
+        纯多旋翼构型（``withManipulator=False``）下 ``manipulator`` 为 ``None``。
         """
         self.model = model
         self.data = data
         self.multirotor = Multirotor(model, data, namespace)
-        self.manipulator = Manipulator(model, data, namespace + self._arm_prefix)
+        self.manipulator = (
+            Manipulator(model, data, namespace + self._arm_prefix)
+            if self._arm_prefix is not None
+            else None
+        )
+
+    @property
+    def has_manipulator(self) -> bool:
+        """当前构型是否包含机械臂。"""
+        return self.manipulator is not None
 
     def _require_compiled(self) -> None:
         if self.model is None or self.data is None:

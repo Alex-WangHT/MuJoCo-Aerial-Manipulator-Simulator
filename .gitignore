@@ -168,3 +168,9 @@ data/
 *.json
 *.npz
 *.npy
+
+# Robot Models
+models/assets/
+models/*.xml
+so_arm100_ref.xml
+models/Manipulator.xml

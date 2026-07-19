@@ -5,8 +5,9 @@
 
 验证内容：
 1. 两份 MJCF 经 mjSpec.attach 组合编译成功，名称前缀化正确，自省结果完整；
-2. 悬停推力 + 机械臂保持零位时，平台近似静止（反扭矩平衡、挂载几何对中）；
-3. 摆动机械臂关节时，平台姿态出现明显扰动——证明臂-平台反作用耦合生效。
+2. 闭环悬停 + 机械臂保持零位时，平台位置/姿态稳定（SO-ARM100 网格臂的
+   质心偏离关节轴线，开环悬停物理上不可行，故悬停用 MultirotorController）；
+3. 摆动机械臂关节时，平台姿态出现可测扰动——证明臂-平台反作用耦合生效。
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from src import AerialManipulator
+from src import AerialManipulator, MultirotorController
 
 DT = 0.001
 
@@ -35,7 +36,7 @@ def main() -> None:
     print("\n[1] 组合编译与名称自省")
     assert abs(model.opt.timestep - DT) < 1e-12, f"timestep 应为 {DT}，实际 {model.opt.timestep}"
     assert uam.multirotor.n_rotors == 6, f"旋翼数应为 6，实际 {uam.multirotor.n_rotors}"
-    assert uam.manipulator.n_joints == 2, f"机械臂关节数应为 2，实际 {uam.manipulator.n_joints}"
+    assert uam.manipulator.n_joints == 3, f"机械臂关节数应为 3，实际 {uam.manipulator.n_joints}"
     assert all(n.startswith("arm/") for n in uam.manipulator.joint_names), "机械臂关节应带 arm/ 前缀"
 
     total_mass = float(model.body_mass.sum())
@@ -56,29 +57,36 @@ def main() -> None:
     assert imu["gyro"].shape == (3,) and imu["accel"].shape == (3,), "IMU 维度应为 3"
     print(f"    IMU 初始读数: gyro={np.round(imu['gyro'], 4)}, accel={np.round(imu['accel'], 4)}")
 
-    # ---------- 2. 悬停 + 机械臂零位保持（1 s） ----------
-    print("\n[2] 悬停 + 机械臂零位保持（1 s）")
-    u_hover = uam.hover_thrust()
-    print(f"    悬停推力估计: {u_hover:.3f} N/rotor")
-    uam.multirotor.set_thrusts(np.full(uam.multirotor.n_rotors, u_hover))
-    uam.manipulator.set_joint_targets([0.0, 0.0])
-    uam.step(int(1.0 / DT))
+    # ---------- 2. 闭环悬停 + 机械臂零位保持（2 s） ----------
+    print("\n[2] 闭环悬停 + 机械臂零位保持（2 s）")
+    drone_ctrl = MultirotorController(targetPosition=[0.0, 0.0, 1.5])
+    drone_ctrl.bind(uam.multirotor)
+    uam.manipulator.set_joint_targets([0.0, 0.0, 0.0])
+
+    def closed_loop(seconds: float) -> None:
+        for _ in range(int(seconds / DT)):
+            sensor = uam.multirotor.get_state()
+            drone_ctrl.setSensorData(sensor)
+            uam.multirotor.set_thrusts(drone_ctrl.getControlInput().u)
+            uam.step()
+
+    closed_loop(2.0)
 
     state1 = uam.multirotor.get_state()
     euler1_deg = np.rad2deg(state1.droneOrientation)
-    print(f"    t=1.0s 平台位置: {np.round(state1.dronePosition, 4)}")
-    print(f"    t=1.0s 平台姿态[deg]: RPY={np.round(euler1_deg, 3)}")
-    print(f"    t=1.0s 关节角[rad]: {np.round(uam.manipulator.get_joint_positions(), 4)}")
-    assert abs(state1.dronePosition[2] - 1.5) < 0.3, "悬停 1 s 后高度不应明显漂移"
-    assert np.max(np.abs(euler1_deg)) < 5.0, "悬停 1 s 后姿态不应明显漂移（反扭矩应自平衡）"
+    print(f"    t=2.0s 平台位置: {np.round(state1.dronePosition, 4)}")
+    print(f"    t=2.0s 平台姿态[deg]: RPY={np.round(euler1_deg, 3)}")
+    print(f"    t=2.0s 关节角[rad]: {np.round(uam.manipulator.get_joint_positions(), 4)}")
+    assert abs(state1.dronePosition[2] - 1.5) < 0.1, "闭环悬停 2 s 后高度不应明显漂移"
+    assert np.max(np.abs(euler1_deg)) < 3.0, "闭环悬停 2 s 后姿态应保持小角"
     assert np.max(np.abs(uam.manipulator.get_joint_positions())) < 0.05, "舵机应保持关节近零位"
 
     # ---------- 3. 摆动机械臂 -> 平台姿态应被反作用扰动 ----------
-    print("\n[3] 机械臂摆动耦合测试（joint1 -> 0.5 rad，0.3 s）")
-    uam.manipulator.set_joint_targets([0.5, 0.0])
+    print("\n[3] 机械臂摆动耦合测试（joint2 -> -0.6 rad，0.5 s，闭环悬停下）")
+    uam.manipulator.set_joint_targets([0.0, -0.6, 0.0])
     max_deviation = 0.0
-    for _ in range(int(0.3 / DT)):
-        uam.step()
+    for _ in range(int(0.5 / DT)):
+        closed_loop(0.001)
         euler_deg = np.rad2deg(uam.multirotor.get_state().droneOrientation)
         max_deviation = max(max_deviation, float(np.max(np.abs(euler_deg - euler1_deg))))
 
@@ -86,8 +94,8 @@ def main() -> None:
     print(f"    关节角[rad]: {np.round(uam.manipulator.get_joint_positions(), 4)}")
     print(f"    平台姿态[deg]: RPY={np.round(np.rad2deg(state2.droneOrientation), 3)}")
     print(f"    姿态最大偏差: {max_deviation:.3f} deg")
-    assert abs(uam.manipulator.get_joint_positions()[0] - 0.5) < 0.15, "舵机应跟踪到 0.5 rad 附近"
-    assert max_deviation > 3.0, (
+    assert abs(uam.manipulator.get_joint_positions()[1] + 0.6) < 0.15, "舵机应跟踪到 -0.6 rad 附近"
+    assert max_deviation > 1.0, (
         f"机械臂摆动未引起平台姿态扰动（最大偏差 {max_deviation:.3f} deg），耦合未生效"
     )
     assert max_deviation < 45.0, (

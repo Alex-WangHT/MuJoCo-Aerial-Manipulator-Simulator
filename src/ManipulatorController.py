@@ -171,14 +171,21 @@ class ManipulatorController:
     # ---------- 内部（默认实现的子步骤，子类可复用） ----------
 
     def _ee_dls_step(self) -> np.ndarray:
-        """朝末端目标做一次阻尼最小二乘雅可比迭代（每帧单步保证稳定）。"""
+        """朝末端目标做一次阻尼最小二乘雅可比迭代（每帧单步保证稳定）。
+
+        采用闭环逆运动学（CLIK）形式：在**实测关节角**上叠加修正量
+        （而不是在上帧目标角上累加）。这样目标角最多领先物理状态一个
+        步长限幅，舵机滞后时也不会形成目标-状态正反馈振荡——对含电枢
+        惯量（armature）的高刚度舵机尤其关键。
+        """
         arm = self._manipulator
         model, data = arm.model, arm.data
 
         ee_pos = data.site_xpos[arm.ee_site_id]
         err = self._ee_target - ee_pos
+        q_meas = arm.get_joint_positions()
         if float(np.linalg.norm(err)) < self._ee_tolerance:
-            return self._joint_targets
+            return q_meas
 
         body_id = int(model.site_bodyid[arm.ee_site_id])
         jacp = np.zeros((3, model.nv))
@@ -191,4 +198,4 @@ class ManipulatorController:
         )
         dq *= self._ee_step_gain
         dq = np.clip(dq, -self._ee_max_step, self._ee_max_step)
-        return self._joint_targets + dq
+        return q_meas + dq
