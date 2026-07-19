@@ -20,8 +20,8 @@ except Exception:  # pragma: no cover
 from .Messages import SensorData
 from .Telemetry import TelemetryBuffer
 
-from ..AerialManipulator import AerialManipulator
-from ..Environment import Environment
+from .AerialManipulator import AerialManipulator
+from .Environment import Environment
 
 
 class MujocoSimulation(threading.Thread):
