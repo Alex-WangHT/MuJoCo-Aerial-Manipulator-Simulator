@@ -3,7 +3,7 @@
 本类做两件事：
 
 1. **协议与装配**：实现 ``MujocoSimulation`` 的 ``droneController`` 协议
-   （``setSensorData`` / ``setUpdateEvent`` / ``getControlInput``），
+   （``setSensorData`` / ``getControlInput``），
    并在 ``bind(multirotor)`` 中备好控制律所需的全部模型信息——
    旋翼几何、整机质量、推力范围与 4xN 控制分配矩阵伪逆；
 2. **默认控制律**：``compute_control()`` 给出串级 PID（位置环 -> 姿态环 ->
@@ -50,7 +50,6 @@ class MultirotorController:
         "bind",
         "set_target_position",
         "setSensorData",
-        "setUpdateEvent",
         "getControlInput",
     })
 
@@ -160,11 +159,6 @@ class MultirotorController:
                 f"compute_control 返回了 {u.size} 个推力值，应为 {self._n_rotors} 个"
             )
         self._u = np.clip(u, self._ctrl_min, self._ctrl_max)
-
-    def setUpdateEvent(self) -> None:
-        """协议兼容钩子（计算已在 setSensorData 中同步完成，无需后台线程）。
-
-        子类若以后台线程计算控制律，可重写本方法通知工作线程。"""
 
     def getControlInput(self) -> ControlInput:
         if self._u is None:

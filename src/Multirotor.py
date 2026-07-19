@@ -38,7 +38,7 @@ class Multirotor:
 
     _ROTOR_PATTERN = re.compile(r"^rotor(\d+)$")
     # 约定名称的可选传感器 -> SensorData 之外的读取入口
-    _SENSOR_KEYS = ("gyro", "accel", "mag", "baro", "drone_pos", "drone_quat", "mount_pos", "mount_quat")
+    _SENSOR_KEYS = ("gyro", "accel", "mag", "drone_pos", "drone_quat", "mount_pos", "mount_quat")
 
     def __init__(self, model, data, namespace: str = ""):
         if mujoco is None:
@@ -141,12 +141,12 @@ class Multirotor:
         return np.array(self._data.sensordata[adr: adr + dim], dtype=float)
 
     def get_imu(self) -> dict[str, np.ndarray]:
-        """读取 IMU 数据：陀螺仪、加速度计（以及磁强计/气压计，若模型提供）。"""
+        """读取 IMU 数据：陀螺仪、加速度计（以及磁强计，若模型提供）。"""
         imu = {
             "gyro": self.get_sensor("gyro"),
             "accel": self.get_sensor("accel"),
         }
-        for optional_key in ("mag", "baro"):
+        for optional_key in ("mag",):
             if optional_key in self._sensors:
                 imu[optional_key] = self.get_sensor(optional_key)
         return imu

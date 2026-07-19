@@ -16,7 +16,7 @@
 - ``MujocoSimulation``  主循环、viewer、遥测、控制器注入与绑定
 
 数据载体:
-- ``Messages``   SensorData / Command / ControlInput
+- ``Messages``   SensorData / ControlInput
 - ``Telemetry``  TelemetryBuffer（线程安全遥测环形缓冲，GCS 读取端）
 - ``TelemetryPublisher``  跨进程遥测通道（UDP+JSON 独立线程，非阻塞）
 
@@ -52,7 +52,7 @@ def quaternionToEuler(q) -> np.ndarray:
     return np.array([roll, pitch, yaw], dtype=float)
 
 
-from .Messages import Command, ControlInput, SensorData  # noqa: E402
+from .Messages import ControlInput, SensorData  # noqa: E402
 from .Telemetry import TelemetryBuffer  # noqa: E402
 from .TelemetryPublisher import TelemetryPublisher  # noqa: E402
 from .Multirotor import Multirotor  # noqa: E402
@@ -72,7 +72,6 @@ __all__ = [
     "ManipulatorController",
     "MujocoSimulation",
     "SensorData",
-    "Command",
     "ControlInput",
     "TelemetryBuffer",
     "TelemetryPublisher",

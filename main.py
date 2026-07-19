@@ -4,17 +4,16 @@
 
     main.py
       ├── threading.Event        全局退出信号
-      ├── TelemetryBuffer        遥测缓冲（仿真线程写，GCS 读）
+      ├── TelemetryBuffer        遥测缓冲（仿真线程写，供外部读取）
       ├── MujocoSimulation       仿真线程（场景 + 机器人 + 控制 + viewer）
       │     ├── MultirotorController    （--pos-target 时注入）
       │     ├── ManipulatorController   （--ee-target 时注入，--no-arm 时忽略）
       │     └── TelemetryPublisher      （--telemetry-out 时启用，UDP 发往另一进程）
-      └── GCS                    Tkinter 地面站（--nogui 或模块缺失时跳过）
 
 示例：
 
-    python main.py                          # 默认：位置闭环悬停于出生点 + viewer + GCS
-    python main.py --nogui --no-viewer      # 纯无头运行
+    python main.py                          # 默认：位置闭环悬停于出生点 + viewer
+    python main.py --no-viewer              # 纯无头运行
     python main.py --fixed-thrust 3.7       # 固定推力开环（非对称载荷下会翻滚，仅链路验证）
     python main.py --joint-targets 0.4 0.0  # 机械臂关节目标角
     python main.py --pos-target 0 0 2.0     # 位置闭环（MultirotorController）
@@ -44,8 +43,6 @@ def create_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--env", "-m", type=str, default=None,
                         help="场景 MJCF 路径（默认 models/environment.xml）")
-    parser.add_argument("--nogui", action="store_true",
-                        help="不打开 GCS 地面站窗口")
     parser.add_argument("--no-viewer", action="store_true",
                         help="不打开 MuJoCo viewer（无头运行）")
     parser.add_argument("--fixed-thrust", type=float, default=None, metavar="N",
@@ -113,25 +110,9 @@ def main() -> None:
     sim.start()
 
     try:
-        if args.nogui:
-            print("[Main] 无界面模式运行中，Ctrl+C 退出。")
-            while sim.is_alive():
-                time.sleep(0.5)
-        else:
-            try:
-                import tkinter as tk  # 延迟导入（GUI 依赖仅在需要时加载）
-
-                from src.GroundControlStation import GCS
-            except ImportError:
-                print("[Main] 地面站模块不可用（src/GroundControlStation.py 缺失），"
-                      "转为无界面模式，Ctrl+C 退出。")
-                while sim.is_alive():
-                    time.sleep(0.5)
-            else:
-                root = tk.Tk()
-                GCS(root, taskManager=None, shutdownEvent=shutdown_event,
-                    telemetryBuffer=telemetry)
-                root.mainloop()
+        print("[Main] 无界面模式运行中，Ctrl+C 退出。")
+        while sim.is_alive():
+            time.sleep(0.5)
     except KeyboardInterrupt:
         print("\n[Main] 收到中断信号。")
     finally:

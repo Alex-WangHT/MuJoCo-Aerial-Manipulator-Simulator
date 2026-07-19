@@ -18,7 +18,7 @@
 ├── src/
 │   ├── MujocoSimulation/          # 仿真包：全部仿真组件
 │   │   ├── __init__.py            #   包导出 + quaternionToEuler + _MODELS_DIR
-│   │   ├── Messages.py            #   SensorData / Command / ControlInput 数据类
+│   │   ├── Messages.py            #   SensorData / ControlInput 数据类
 │   │   ├── Telemetry.py           #   TelemetryBuffer（线程安全遥测环形缓冲）
 │   │   ├── Multirotor.py          #   平台视图（旋翼/机体状态/IMU/挂载点/旋翼几何）
 │   │   ├── Manipulator.py         #   机械臂视图（关节/舵机/末端）
@@ -27,7 +27,7 @@
 │   │   ├── MultirotorController.py    # 多旋翼控制器基类（默认串级 PID + 混控）
 │   │   ├── ManipulatorController.py   # 机械臂控制器基类（默认关节/末端 DLS）
 │   │   └── MujocoSimulation.py    #   仿真线程（仿真整体打包）
-│   └── （GroundControlStation.py 已移除；GCS 将由用户重写，main.py 自动降级无界面模式）
+│   └── （GroundControlStation.py 已移除；GCS 待用户重写，main.py 始终无界面运行）
 └── tests/                         # 四个端到端测试（见第 7 节）
 ```
 
@@ -50,12 +50,11 @@ main.py
   │     ├── ManipulatorController  bind -> Manipulator；每帧 update()
   │     ├── TelemetryBuffer        每帧追加 (t, position, euler)
   │     └── mujoco.viewer          useViewer=True 时可视化
-  └── GCS（已移除，待用户重写）     main.py 检测缺失后自动降级无界面模式
 ```
 
 **依赖方向单向向下**：视图只依赖包内 `Messages`；组合器依赖视图；控制器基类
 依赖视图（几何/质量自省）；仿真线程依赖组合器与控制器；入口依赖一切。层间只通过
-`MjModel`/`MjData` 共享引用和小数据类（SensorData/Command/ControlInput）通信。
+`MjModel`/`MjData` 共享引用和小数据类（SensorData/ControlInput）通信。
 
 ## 3. 模型组合机制（mjSpec）
 
@@ -87,8 +86,7 @@ environment.xml (父)
 
 ### 数据载体（`Messages.py` / `Telemetry.py`）
 
-- `SensorData`：timestamp/timestep/位置/速度/加速度/欧拉角/角速度/字典
-- `Command`：setpoint 指令载体（预留给 GCS/MAVLink）
+- `SensorData`：timestamp/timestep/位置/速度/欧拉角/角速度
 - `ControlInput`：控制器输出，旋翼推力向量 `u` [N]
 - `TelemetryBuffer(maxSamples=5000)`：锁保护环形缓冲，`append/snapshot/clear`，
   跨线程（仿真写 → GCS 读）安全
@@ -161,7 +159,7 @@ environment.xml (父)
   （`_alloc_pinv`、`_mass`、`_gravity`、`_ctrl_min/_ctrl_max` 供子类复用）；
   由仿真线程组装时自动回调（两段式构造）
 - droneController 协议：`setSensorData`（调用控制律并截断推力）/
-  `setUpdateEvent`（兼容钩子）/ `getControlInput() -> ControlInput`
+  `getControlInput() -> ControlInput`
 - `set_target_position(pos, yaw=None)`：目标注入点（供 GCS/MAVLink）
 - 默认控制律 `compute_control`：串级 PID——位置环 PID → 期望加速度 →
   小角近似分配 roll/pitch → 姿态环 PID → 力矩 → 伪逆混控
@@ -235,7 +233,7 @@ class BadController(MultirotorController):
 
 ```text
 sensor = multirotor.get_state()
-  ├─> droneController.setSensorData(sensor) + setUpdateEvent()   （若有控制器）
+  ├─> droneController.setSensorData(sensor)                        （若有控制器）
   └─> telemetryBuffer.append(t, pos, euler)                      （若有遥测）
 u = controller.getControlInput().u  |  fixedRotorThrust  |  hover_thrust()
 multirotor.set_thrusts(u) -> manipulatorController.update()? -> env.step()
@@ -259,8 +257,8 @@ clock-only 空转（维持控制器/遥测链路）。
 ## 6. 入口（main.py）
 
 ```text
-python main.py                          默认场景 + 悬停推力 + viewer + GCS
-python main.py --nogui --no-viewer      纯无头运行
+python main.py                          默认场景 + 悬停推力 + viewer
+python main.py --no-viewer              纯无头运行
 python main.py --fixed-thrust 3.5       固定推力开环
 python main.py --pos-target 0 0 2.0     位置闭环（MultirotorController）
 python main.py --joint-targets 0.4 0.0  机械臂关节目标角
@@ -269,7 +267,7 @@ python main.py --env <场景.xml> --rtf 1.0
 ```
 
 调用链：`argparse -> Event + TelemetryBuffer (+ 控制器) -> MujocoSimulation.start()
--> (--nogui 或 GCS 缺失 ? 主线程等待 : GCS mainloop) -> 退出时 shutdown + join`。
+-> 主线程等待 -> 退出时 shutdown + join`。
 
 ## 7. 测试
 
@@ -287,7 +285,7 @@ python main.py --env <场景.xml> --rtf 1.0
 - 无头模式每帧 1 个物理步 + 传感提取的开销使实际速率约为 0.6~0.7 倍实时
   （Windows 睡眠粒度）；需要更高 RTF 时可改为每帧多物理步
 - 旧文件已移除：`include/`（Messages/Telemetry 已收进包内）、
-  `src/GroundControlStation.py`（GCS 待用户重写，main.py 自动降级）、
+  `src/GroundControlStation.py`（GCS 待用户重写）、
   `src/ControlEnvironment.py`、`src/Robot.py`、`models/common_uam.xml`、
   `models/Drone.xml`、`models/UAM_*cables.xml`、`.gitmodules`（PX4 子模块路线已弃）
 - README.md 仍描述更早的 MVP 结构，待更新

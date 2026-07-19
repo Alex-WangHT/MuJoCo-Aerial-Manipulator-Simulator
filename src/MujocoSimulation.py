@@ -194,7 +194,6 @@ class MujocoSimulation(threading.Thread):
 
         if self._droneController is not None:
             self._droneController.setSensorData(sensor)
-            self._droneController.setUpdateEvent()
         if self._telemetryBuffer is not None:
             self._telemetryBuffer.append(
                 sensor.timestamp, sensor.dronePosition, sensor.droneOrientation
@@ -254,7 +253,6 @@ class MujocoSimulation(threading.Thread):
                 self._telemetryBuffer.append(timestamp, position, euler)
             if self._droneController is not None:
                 self._droneController.setSensorData(sensor)
-                self._droneController.setUpdateEvent()
             time.sleep(timestep)
             timestamp += timestep
 
