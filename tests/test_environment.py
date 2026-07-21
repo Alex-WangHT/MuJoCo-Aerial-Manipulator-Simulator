@@ -7,7 +7,7 @@
 1. Environment 加载场景、AerialManipulator（未编译模式）attach 进场景统一编译；
 2. 机器人名称带场景前缀（uam/、uam/arm/），出生位姿正确；
 3. 障碍物按 obstacle_ 前缀自被发现且位置与 MJCF 一致；
-4. 场景中悬停 0.5 s 高度保持；
+4. 场景中悬停 0.5 s 高度保持（MultirotorController 独立线程经帧同步通道驱动）；
 5. 零推力下落后机器人与地板产生接触（get_robot_contacts 非空）。
 """
 
@@ -20,7 +20,14 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from src import AerialManipulator, Environment, MultirotorController
+from src import (
+    AerialManipulator,
+    ControllerChannel,
+    Environment,
+    Manipulator,
+    Multirotor,
+    MultirotorController,
+)
 
 
 def main() -> None:
@@ -31,7 +38,7 @@ def main() -> None:
     # ---------- 1. 组合编译与前缀检查 ----------
     print("\n[1] 场景组合编译")
     env = Environment()
-    uam = AerialManipulator(compileModel=False)
+    uam = AerialManipulator(Multirotor(), Manipulator(), compileModel=False)
     env.attach_robot(uam)
 
     assert uam.model is env.model, "机器人应共享场景模型"
@@ -65,23 +72,29 @@ def main() -> None:
     for name, pos in sorted(obstacle_positions.items()):
         print(f"    {name}: {np.round(pos, 3)}")
 
-    # ---------- 4. 场景中闭环悬停 0.5 s ----------
+    # ---------- 4. 场景中闭环悬停 0.5 s（控制器独立线程） ----------
     print("\n[4] 场景中闭环悬停（0.5 s）")
-    drone_ctrl = MultirotorController(targetPosition=[0.0, 0.0, 1.5])
-    drone_ctrl.bind(uam.multirotor)
-    uam.manipulator.set_joint_targets([0.0, 0.0, 0.0])
-    for _ in range(500):
-        sensor = uam.multirotor.get_state()
-        drone_ctrl.setSensorData(sensor)
-        uam.multirotor.set_thrusts(drone_ctrl.getControlInput().u)
-        env.step()
+    drone_channel = ControllerChannel()
+    drone_ctrl = MultirotorController(drone_channel, uam.multirotor, targetPosition=[0.0, 0.0, 1.5])
+    drone_ctrl.start()
+    uam.manipulator.set_actuator([0.0, 0.0, 0.0])
+    try:
+        for _ in range(500):
+            drone_channel.mailbox.publish(uam.multirotor.get_state())
+            drone_channel.mailbox.wait_done()
+            drone_channel.flush()
+            env.step()
+    finally:
+        drone_channel.close()
+        drone_ctrl.join(timeout=2.0)
+    assert not drone_ctrl.is_alive(), "控制器线程应随通道关闭而退出"
     state = uam.multirotor.get_state()
     print(f"    t=0.5s 高度: {state.dronePosition[2]:.4f} m, 姿态[deg]: {np.round(np.rad2deg(state.droneOrientation), 2)}")
     assert abs(state.dronePosition[2] - 1.5) < 0.1, "悬停 0.5 s 高度应保持"
 
     # ---------- 5. 下落接触交互 ----------
     print("\n[5] 零推力下落 -> 机器人与地板接触")
-    uam.multirotor.set_thrusts(np.zeros(uam.multirotor.n_rotors))
+    uam.multirotor.set_actuator(np.zeros(uam.multirotor.n_rotors))
     robot_contacts = []
     for _ in range(1500):
         env.step()

@@ -1,34 +1,40 @@
 """MuJoCo 空中机械臂仿真包 —— 除地面站外的全部仿真组件。
 
-视图层:
-- ``Multirotor``        多旋翼平台视图（旋翼/机体状态/IMU/挂载点/旋翼几何）
-- ``Manipulator``       机械臂视图（关节/舵机/末端）
+组件层（各自读取自身 MJCF，两阶段生命周期）:
+- ``Multirotor``        多旋翼平台：读取 multirotor.xml，自省 actuator/sensor；
+                        编译后 bind，读写接口 set_actuator / get_sensor
+- ``Manipulator``       机械臂：读取 Manipulator.xml，同样模式
 
 组合层:
-- ``AerialManipulator`` 机器人组合器（平台 + 机械臂，mjSpec.attach）
-- ``Environment``       MuJoCo 场景环境（地板/障碍物，最顶层组合器）
+- ``AerialManipulator`` 机器人组合器（输入为两组件实例，attach 打包编译视图）
+- ``Environment``       MuJoCo 场景环境（地板/障碍物，最顶层组合器，
+                        AerialManipulator 挂进来合体编译）
 
-控制层（均为基类，用户继承后重写控制律方法即得自定义控制器）:
-- ``MultirotorController``   默认串级 PID + 混控；重写 compute_control(sensor)->u
-- ``ManipulatorController``  默认关节直通/末端 DLS；重写 compute_joint_targets()->q
-
-仿真线程:
-- ``MujocoSimulation``  主循环、viewer、遥测、控制器注入与绑定
+线程/通信层（三线程模型）:
+- ``MujocoSimulation``  仿真线程：输入 Environment + AerialManipulator 实例
+                        （合并打包，仅对 Environment 编译），唯一访问 mjData；
+                        编译后暴露 drone_channel / arm_channel
+- ``MultirotorController``   多旋翼控制器线程基类；重写 control()
+- ``ManipulatorController``  机械臂控制器线程基类；重写 compute_joint_targets()
+- ``FrameSync``         FrameMailbox 帧同步邮箱 + ControllerChannel 通道
+- ``Actuators``         RotorActuator / ServoActuator 执行器缓冲
+                        （控制器写缓冲，仿真线程帧边界统一落盘 mjData）
 
 数据载体:
-- ``Messages``   SensorData / ControlInput
+- ``Messages``   SensorData / ManipulatorSensorData / ControlInput
 - ``Telemetry``  TelemetryBuffer（线程安全遥测环形缓冲，GCS 读取端）
 - ``TelemetryPublisher``  跨进程遥测通道（UDP+JSON 独立线程，非阻塞）
 
-分层调用关系::
+分层调用关系（Simulation 不接收 Controller 对象）::
 
-    MujocoSimulation (threading.Thread)
-      ├── MultirotorController ──bind──> Multirotor 视图
-      ├── ManipulatorController ─bind──> Manipulator 视图
-      └── Environment              加载 models/environment.xml
+    MujocoSimulation (threading.Thread)      仅编译 Environment，独占 mjData
+      └── Environment              加载 models/environment.xml，统一编译
             └── AerialManipulator  compileModel=False，挂到 uam_spawn
-                  ├── Multirotor   视图（namespace="uam/"）
-                  └── Manipulator  视图（namespace="uam/arm/"）
+                  ├── Multirotor   读 multirotor.xml（bind namespace="uam/"）
+                  └── Manipulator  读 Manipulator.xml（bind namespace="uam/arm/")
+
+    MultirotorController (thread) ──drone_channel──> 帧同步邮箱 + 旋翼执行器缓冲
+    ManipulatorController (thread) ──arm_channel──> 帧同步邮箱 + 舵机执行器缓冲
 
 地面站通过 TelemetryBuffer 与本包解耦。
 """
@@ -52,9 +58,11 @@ def quaternionToEuler(q) -> np.ndarray:
     return np.array([roll, pitch, yaw], dtype=float)
 
 
-from .Messages import ControlInput, SensorData  # noqa: E402
+from .Messages import ControlInput, ManipulatorSensorData, SensorData  # noqa: E402
 from .Telemetry import TelemetryBuffer  # noqa: E402
 from .TelemetryPublisher import TelemetryPublisher  # noqa: E402
+from .FrameSync import ControllerChannel, FrameMailbox  # noqa: E402
+from .Actuators import RotorActuator, ServoActuator  # noqa: E402
 from .Multirotor import Multirotor  # noqa: E402
 from .Manipulator import Manipulator  # noqa: E402
 from .AerialManipulator import AerialManipulator  # noqa: E402
@@ -71,7 +79,12 @@ __all__ = [
     "MultirotorController",
     "ManipulatorController",
     "MujocoSimulation",
+    "FrameMailbox",
+    "ControllerChannel",
+    "RotorActuator",
+    "ServoActuator",
     "SensorData",
+    "ManipulatorSensorData",
     "ControlInput",
     "TelemetryBuffer",
     "TelemetryPublisher",

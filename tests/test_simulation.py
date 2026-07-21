@@ -1,14 +1,14 @@
-"""MujocoSimulation 整体打包的无头仿真测试。
+"""MujocoSimulation 三线程模型的无头仿真测试。
 
 直接运行：
     .venv/Scripts/python tests/test_simulation.py
 
 验证内容：
-1. 闭环悬停无头运行 1 s：遥测按 ~1 kHz 记录，高度保持 1.5 m；
-   （SO-ARM100 网格臂质心偏离关节轴线，开环悬停物理上不可行，故用位置闭环）
+1. 闭环悬停无头运行 1 s：控制器独立线程经 sim.drone_channel 接线，
+   遥测按 ~1 kHz 记录，高度保持 1.5 m；
 2. 位置闭环上升到 2.0 m；
-3. 固定推力 0：无人机应下落（并由机械臂/机体触地支撑）；
-4. stop() 后线程正常退出。
+3. 固定推力 0（无控制器线程）：无人机应下落；
+4. stop() 后仿真线程与控制器线程均正常退出。
 """
 
 from __future__ import annotations
@@ -22,28 +22,49 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from src import MujocoSimulation, MultirotorController, TelemetryBuffer
+from src import (
+    AerialManipulator,
+    Environment,
+    Manipulator,
+    MujocoSimulation,
+    Multirotor,
+    MultirotorController,
+    TelemetryBuffer,
+)
 
 
-def run_sim(seconds: float, **kwargs) -> tuple[MujocoSimulation, TelemetryBuffer]:
+def run_sim(seconds: float, droneTarget=None, **kwargs):
+    """组装场景+机器人并启动仿真线程；给 droneTarget 时接线一个位置闭环控制器线程。"""
     shutdown = threading.Event()
     telemetry = TelemetryBuffer()
-    sim = MujocoSimulation(shutdown, telemetryBuffer=telemetry, useViewer=False, **kwargs)
+    env = Environment()
+    uam = AerialManipulator(Multirotor(), Manipulator(), compileModel=False)
+    sim = MujocoSimulation(shutdown, env, uam, telemetryBuffer=telemetry, useViewer=False, **kwargs)
     sim.start()
+    assert sim.wait_ready(timeout=10.0), "场景编译超时"
+    drone_ctrl = None
+    if droneTarget is not None:
+        drone_ctrl = MultirotorController(sim.drone_channel, sim.uam.multirotor,
+                                          targetPosition=droneTarget)
+        drone_ctrl.start()
+    sim.start_physics()
     time.sleep(seconds)
     shutdown.set()
     sim.join(timeout=3.0)
+    if drone_ctrl is not None:
+        drone_ctrl.join(timeout=2.0)
+        assert not drone_ctrl.is_alive(), "控制器线程应随通道关闭而退出"
     return sim, telemetry
 
 
 def main() -> None:
     print("=" * 64)
-    print("MujocoSimulation 无头仿真测试")
+    print("MujocoSimulation 无头仿真测试（三线程模型）")
     print("=" * 64)
 
     # ---------- 1. 闭环悬停 1 s ----------
     print("\n[1] 位置闭环悬停（目标 z=1.5 m），无头运行 1 s")
-    sim, telemetry = run_sim(1.0, droneController=MultirotorController(targetPosition=[0.0, 0.0, 1.5]))
+    sim, telemetry = run_sim(1.0, droneTarget=[0.0, 0.0, 1.5])
     assert not sim.is_alive(), "stop 后线程应退出"
     assert sim.env is not None and sim.uam is not None, "场景与机器人应已构建"
     time_arr, positions, eulers = telemetry.snapshot()
@@ -58,12 +79,12 @@ def main() -> None:
 
     # ---------- 2. 位置闭环上升到 2.0 m ----------
     print("\n[2] 位置闭环上升（目标 z=2.0 m），1.5 s")
-    _, telemetry_up = run_sim(1.5, droneController=MultirotorController(targetPosition=[0.0, 0.0, 2.0]))
+    _, telemetry_up = run_sim(1.5, droneTarget=[0.0, 0.0, 2.0])
     _, pos_up, _ = telemetry_up.snapshot()
     print(f"    末端高度: {pos_up[-1][2]:.4f} m（初始 1.5 m）")
     assert pos_up[-1][2] > 1.6, f"闭环爬升应到达 2.0 m 附近，实际 {pos_up[-1][2]:.3f}"
 
-    # ---------- 3. 固定推力 0 -> 下落 ----------
+    # ---------- 3. 固定推力 0（无控制器线程）-> 下落 ----------
     print("\n[3] 固定推力 0，0.8 s")
     _, telemetry_down = run_sim(0.8, fixedRotorThrust=0.0)
     _, pos_down, _ = telemetry_down.snapshot()
@@ -71,7 +92,7 @@ def main() -> None:
     assert pos_down[-1][2] < 1.0, f"零推力应下落，实际 {pos_down[-1][2]:.3f}"
 
     print("\n" + "=" * 64)
-    print("PASS: 悬停遥测、固定推力上升/下落、线程退出 全部通过")
+    print("PASS: 悬停遥测、闭环爬升、开环下落、线程退出 全部通过")
     print("=" * 64)
 
 

@@ -1,14 +1,17 @@
 """MuJoCo 空中机械臂仿真器 —— 程序入口。
 
-调用链：
+三线程模型（Simulation 不接收 Controller 对象）：
 
     main.py
       ├── threading.Event        全局退出信号
       ├── TelemetryBuffer        遥测缓冲（仿真线程写，供外部读取）
-      ├── MujocoSimulation       仿真线程（场景 + 机器人 + 控制 + viewer）
-      │     ├── MultirotorController    （--pos-target 时注入）
-      │     ├── ManipulatorController   （--ee-target 时注入，--no-arm 时忽略）
-      │     └── TelemetryPublisher      （--telemetry-out 时启用，UDP 发往另一进程）
+      ├── MujocoSimulation       仿真线程（唯一访问 mjData，仅编译 Environment）
+      │     └── wait_ready 后暴露 drone_channel / arm_channel
+      ├── MultirotorController   独立控制线程（--fixed-thrust 时不启动）
+      └── ManipulatorController  独立控制线程（--ee-target/--joint-targets 时启动）
+
+接线顺序：sim.start() -> sim.wait_ready() -> 构造并 start 控制器线程
+-> sim.start_physics() 放行物理。
 
 示例：
 
@@ -30,8 +33,12 @@ import time
 
 from src import TelemetryBuffer
 from src import (
+    AerialManipulator,
+    Environment,
+    Manipulator,
     ManipulatorController,
     MujocoSimulation,
+    Multirotor,
     MultirotorController,
 )
 
@@ -84,30 +91,53 @@ def main() -> None:
     shutdown_event = threading.Event()
     telemetry = TelemetryBuffer()
 
-    # 两段式控制器：先构造注入，仿真线程组装时自动 bind 到视图
-    drone_controller = None
-    if args.pos_target is not None:
-        drone_controller = MultirotorController(targetPosition=args.pos_target)
-    manipulator_controller = None
-    if not args.no_arm and args.ee_target is not None:
-        manipulator_controller = ManipulatorController(jointTargets=args.joint_targets)
-        manipulator_controller.set_target_ee(args.ee_target)
-
+    # ---- 组装：组件 -> 机器人 -> 场景 + 机器人 -> 仿真线程 ----
+    env = Environment(args.env)
+    uam = AerialManipulator(
+        Multirotor(),
+        None if args.no_arm else Manipulator(),
+        compileModel=False,
+    )
     sim = MujocoSimulation(
         shutdown_event,
-        environmentPath=args.env,
+        env,
+        uam,
         telemetryBuffer=telemetry,
-        droneController=drone_controller,
-        manipulatorController=manipulator_controller,
         fixedRotorThrust=args.fixed_thrust,
-        jointTargets=args.joint_targets,
         useViewer=not args.no_viewer,
         realTimeFactor=args.rtf,
-        withManipulator=not args.no_arm,
         telemetryTarget=telemetry_target,
         telemetryRateHz=args.telemetry_rate,
     )
     sim.start()
+    if not sim.wait_ready(timeout=15.0):
+        shutdown_event.set()
+        sim.join(timeout=2.0)
+        raise SystemExit("[Main] 仿真场景编译超时。")
+
+    # ---- 控制器线程接线（物理停放中，构造读视图无竞争） ----
+    controllers = []
+    if args.fixed_thrust is None:
+        # 默认：位置闭环悬停于出生点（开环等推力在非对称载荷下物理发散）
+        target = args.pos_target
+        if target is None:
+            target = sim.uam.multirotor.get_state().dronePosition
+            print(f"[Main] 默认位置闭环悬停于出生点 {target.round(3)}")
+        drone_controller = MultirotorController(
+            sim.drone_channel, sim.uam.multirotor, targetPosition=target
+        )
+        drone_controller.start()
+        controllers.append(drone_controller)
+    if not args.no_arm and (args.joint_targets is not None or args.ee_target is not None):
+        arm_controller = ManipulatorController(
+            sim.arm_channel, sim.uam.manipulator, jointTargets=args.joint_targets
+        )
+        if args.ee_target is not None:
+            arm_controller.set_target_ee(args.ee_target)
+        arm_controller.start()
+        controllers.append(arm_controller)
+
+    sim.start_physics()
 
     try:
         print("[Main] 无界面模式运行中，Ctrl+C 退出。")
@@ -118,6 +148,8 @@ def main() -> None:
     finally:
         shutdown_event.set()
         sim.join(timeout=2.0)
+        for controller in controllers:
+            controller.join(timeout=1.0)
 
 
 if __name__ == "__main__":

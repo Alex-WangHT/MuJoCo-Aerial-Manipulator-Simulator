@@ -1,20 +1,18 @@
 """空中机械臂组合器。
 
-用 mjSpec.attach 把机械臂 MJCF 固连到多旋翼 MJCF 的挂载 site 上，
-编译后生成 Multirotor / Manipulator 两个带名称前缀的视图；
-也支持 compileModel=False 的未编译模式，供 Environment 二次组合。
+把 Multirotor 与 Manipulator 两个组件（各自已读取自身 MJCF）打包成
+整机机器人：机械臂 spec 经 ``mjSpec.attach`` 固连到多旋翼 spec 的挂载
+site 上，编译后回调两个组件的 ``bind()`` 生成视图；也支持
+``compileModel=False`` 的未编译模式，供 Environment 二次组合统一编译。
 """
 
 from __future__ import annotations
-
-import pathlib
 
 try:
     import mujoco
 except Exception:  # pragma: no cover
     mujoco = None
 
-from . import _MODELS_DIR
 from .Manipulator import Manipulator
 from .Multirotor import Multirotor
 
@@ -23,12 +21,12 @@ class AerialManipulator:
     """空中机械臂（UAM）机器人组合器。
 
     职责：
-    - 加载多旋翼平台 MJCF（``multirotor.xml``）；``withManipulator=True``（默认）
-      时再加载机械臂 MJCF（``Manipulator.xml``），以平台 MJCF 中声明的挂载点
-      site（默认 ``manipulator_mount``，位于机体系）作为固连位置，通过
-      ``mjSpec.attach`` 组合机器人 spec；
-    - ``withManipulator=False`` 时为纯多旋翼构型：不加载机械臂，
-      编译后 ``manipulator`` 视图为 ``None``；
+    - 接收已读取 MJCF 的 ``Multirotor`` / ``Manipulator`` 组件实例，
+      以平台 MJCF 中声明的挂载点 site（默认 ``manipulator_mount``，位于
+      机体系）作为固连位置，通过 ``mjSpec.attach`` 把机械臂 spec 挂进
+      平台 spec，组合出整机机器人 spec；
+    - ``manipulator=None`` 时为纯多旋翼构型：不 attach，
+      ``has_manipulator`` 为 ``False``；
     - 两种使用方式：
 
       1. 独立运行（默认 ``compileModel=True``）：立即编译出共享
@@ -36,38 +34,49 @@ class AerialManipulator:
       2. 放入场景（``compileModel=False``）：只构建 ``self.spec``，由
          ``Environment.attach_robot()`` 挂到场景统一编译，之后通过
          ``bind_views()`` 绑定到场景模型（名称自动带场景前缀）。
+
+    构造示例::
+
+        uam = AerialManipulator(Multirotor(), Manipulator())                 # 独立编译
+        uam = AerialManipulator(Multirotor(), Manipulator(), compileModel=False)  # 交给场景
+        uam = AerialManipulator(Multirotor())                                # 纯多旋翼
     """
 
     def __init__(
         self,
-        multirotorPath: str | None = None,
-        manipulatorPath: str | None = None,
+        multirotor: Multirotor,
+        manipulator: Manipulator | None = None,
         mountSite: str = Multirotor.MOUNT_SITE_NAME,
         armPrefix: str = "arm/",
         compileModel: bool = True,
-        withManipulator: bool = True,
     ):
         if mujoco is None:
             raise ImportError("AerialManipulator 需要 mujoco 包，请先 pip install mujoco")
+        if not isinstance(multirotor, Multirotor):
+            raise TypeError(
+                f"AerialManipulator: multirotor 应为 Multirotor 实例，收到 {type(multirotor).__name__}"
+            )
+        if manipulator is not None and not isinstance(manipulator, Manipulator):
+            raise TypeError(
+                f"AerialManipulator: manipulator 应为 Manipulator 实例或 None，"
+                f"收到 {type(manipulator).__name__}"
+            )
 
-        platform_path = pathlib.Path(multirotorPath) if multirotorPath else _MODELS_DIR / "multirotor.xml"
-        platform_spec = mujoco.MjSpec.from_file(str(platform_path))
+        # ---- 组件（已各自读取 MJCF） ----
+        self.multirotor = multirotor
+        self.manipulator = manipulator
 
-        # 挂载点位姿声明在 multirotor.xml 的 drone 机体系内，attach 后机械臂
-        # worldbody 转换为固连在该 site 上的 frame，子模型名称自动加前缀
-        self._arm_prefix = armPrefix if withManipulator else None
-        if withManipulator:
-            arm_path = pathlib.Path(manipulatorPath) if manipulatorPath else _MODELS_DIR / "Manipulator.xml"
-            arm_spec = mujoco.MjSpec.from_file(str(arm_path))
-            self._attach_frame = platform_spec.attach(arm_spec, site=mountSite, prefix=armPrefix)
-        else:
-            self._attach_frame = None
+        # ---- 打包：机械臂 spec 固连到平台挂载点，子模型名称自动加前缀 ----
+        self.spec = self.multirotor.spec
+        self._arm_prefix = armPrefix if manipulator is not None else None
+        self._attach_frame = (
+            self.spec.attach(manipulator.spec, site=mountSite, prefix=armPrefix)
+            if manipulator is not None
+            else None
+        )
 
-        self.spec = platform_spec
         self.model = None
         self.data = None
-        self.multirotor: Multirotor | None = None
-        self.manipulator: Manipulator | None = None
 
         if compileModel:
             self.compile()
@@ -87,16 +96,13 @@ class AerialManipulator:
 
         由独立模式的 ``compile()`` 或 ``Environment.attach_robot()`` 调用；
         ``namespace`` 为场景 attach 时使用的前缀（如 ``uam/``）。
-        纯多旋翼构型（``withManipulator=False``）下 ``manipulator`` 为 ``None``。
+        纯多旋翼构型（未传 ``manipulator``）下 ``manipulator`` 为 ``None``。
         """
         self.model = model
         self.data = data
-        self.multirotor = Multirotor(model, data, namespace)
-        self.manipulator = (
-            Manipulator(model, data, namespace + self._arm_prefix)
-            if self._arm_prefix is not None
-            else None
-        )
+        self.multirotor.bind(model, data, namespace)
+        if self.manipulator is not None:
+            self.manipulator.bind(model, data, namespace + self._arm_prefix)
 
     @property
     def has_manipulator(self) -> bool:
@@ -130,4 +136,3 @@ class AerialManipulator:
         self._require_compiled()
         total_mass = float(self.model.body_mass.sum())
         return total_mass * 9.81 / self.multirotor.n_rotors
-
