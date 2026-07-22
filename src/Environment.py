@@ -1,7 +1,8 @@
 """MuJoCo 场景环境。
 
-加载环境 MJCF（地板 / 障碍物 / 出生点），把 AerialManipulator（未编译模式）
-attach 进场景统一编译，是仿真模型的最顶层组合器；
+加载环境 MJCF（地板 / 障碍物 / 出生点），把机器人组件（Multirotor + 可选
+Manipulator）经两级 mjSpec attach（机械臂→挂载点、整机→出生点）组合进场景
+统一编译，是仿真模型的唯一组合器；
 提供障碍物查询与接触（碰撞）查询等交互接口。
 """
 
@@ -17,17 +18,20 @@ except Exception:  # pragma: no cover
     mujoco = None
 
 from . import _MODELS_DIR
-from .AerialManipulator import AerialManipulator
+from .Manipulator import Manipulator
+from .Multirotor import Multirotor
+from .Robot import Robot
 
 
 class Environment:
     """MuJoCo 场景环境：地板、灯光、障碍物与机器人的组合器。
 
-    作为最顶层组合器加载 ``models/environment.xml``，机器人
-    （``AerialManipulator``，需以 ``compileModel=False`` 构建）通过
-    ``attach_robot()`` 挂到场景中的 ``uam_spawn`` site 上统一编译。
-    编译后机器人的 ``Multirotor``/``Manipulator`` 视图自动绑定到场景
-    共享模型（名称带机器人前缀，默认 ``uam/``）。
+    作为唯一组合器加载 ``models/environment.xml``，机器人组件
+    （``Multirotor`` + 可选 ``Manipulator``，均已各自读取 MJCF、尚未绑定）
+    通过 ``attach_robot()`` 完成组合：机械臂 spec 固连到多旋翼的
+    ``manipulator_mount`` site（名称加 ``armPrefix``），整机再挂到场景的
+    ``uam_spawn`` site 上（名称加 ``prefix``，默认 ``uam/``），随后统一编译。
+    编译后组件视图自动绑定到场景共享模型，返回 ``Robot`` 句柄。
 
     交互查询：
     - ``obstacles`` / ``get_obstacle_positions()``：障碍物名称与位置
@@ -44,8 +48,8 @@ class Environment:
         env_path = pathlib.Path(environmentPath) if environmentPath else _MODELS_DIR / "environment.xml"
         self._spec = mujoco.MjSpec.from_file(str(env_path))
 
-        self._attachments: list[tuple[AerialManipulator, str]] = []
-        self.robots: list[AerialManipulator] = []
+        self._attachments: list[tuple[Multirotor, Manipulator | None, str, str]] = []
+        self.robots: list[Robot] = []
 
         self.model = None
         self.data = None
@@ -55,33 +59,58 @@ class Environment:
 
     def attach_robot(
         self,
-        uam: AerialManipulator,
+        multirotor: Multirotor,
+        manipulator: Manipulator | None = None,
         site: str = SPAWN_SITE_NAME,
         prefix: str = "uam/",
-    ) -> AerialManipulator:
-        """将机器人挂到场景的 ``site`` 上并重新统一编译。
+        mountSite: str = Multirotor.MOUNT_SITE_NAME,
+        armPrefix: str = "arm/",
+    ) -> Robot:
+        """组合机器人组件并挂到场景的 ``site`` 上，重新统一编译。
 
-        ``uam`` 必须以 ``compileModel=False`` 构建；attach 后其全部名称
-        获得 ``prefix`` 前缀（如 ``uam/drone``、``uam/arm/joint1``）。
+        两级 attach：有机械臂时先把 ``manipulator`` 的 spec 固连到多旋翼的
+        ``mountSite``（子模型名称加 ``armPrefix``），再把整机 spec 挂到场景
+        ``site``（全部名称加 ``prefix``，如 ``uam/drone``、``uam/arm/joint1``）。
+
+        组件须尚未绑定（一经 attach 编译即绑定到场景，不可重复挂载）。
+        返回绑定完成的 ``Robot`` 句柄（同入 ``self.robots``）。
         """
-        if uam.model is not None:
-            raise ValueError(
-                "attach_robot 需要未编译的 AerialManipulator（compileModel=False）"
+        if not isinstance(multirotor, Multirotor):
+            raise TypeError(
+                f"attach_robot: multirotor 应为 Multirotor 实例，收到 {type(multirotor).__name__}"
             )
-        self._spec.attach(uam.spec, site=site, prefix=prefix)
-        self._attachments.append((uam, prefix))
+        if manipulator is not None and not isinstance(manipulator, Manipulator):
+            raise TypeError(
+                f"attach_robot: manipulator 应为 Manipulator 实例或 None，"
+                f"收到 {type(manipulator).__name__}"
+            )
+        if multirotor.model is not None or (manipulator is not None and manipulator.model is not None):
+            raise ValueError(
+                "attach_robot 需要未绑定的组件：组件一经 attach 编译即绑定到场景，"
+                "请重新构造 Multirotor / Manipulator 实例"
+            )
+
+        # ---- 第一级：机械臂 spec 固连到平台挂载点，子模型名称加 arm 前缀 ----
+        if manipulator is not None:
+            multirotor.spec.attach(manipulator.spec, site=mountSite, prefix=armPrefix)
+
+        # ---- 第二级：整机 spec 挂到场景出生点，全部名称加机器人前缀 ----
+        self._spec.attach(multirotor.spec, site=site, prefix=prefix)
+        self._attachments.append((multirotor, manipulator, prefix, armPrefix))
         self.compile()
-        return uam
+        return self.robots[-1]
 
     def compile(self) -> None:
-        """编译场景（含已挂载的全部机器人），并绑定各机器人视图。"""
+        """编译场景（含已挂载的全部机器人），并绑定各机器人组件视图。"""
         self.model = self._spec.compile()
         self.data = mujoco.MjData(self.model)
 
         self.robots = []
-        for uam, prefix in self._attachments:
-            uam.bind_views(self.model, self.data, namespace=prefix)
-            self.robots.append(uam)
+        for multirotor, manipulator, prefix, armPrefix in self._attachments:
+            multirotor.bind(self.model, self.data, prefix)
+            if manipulator is not None:
+                manipulator.bind(self.model, self.data, prefix + armPrefix)
+            self.robots.append(Robot(multirotor, manipulator, prefix))
 
         self._refresh_obstacles()
         # 前向一次运动学，使位姿/接触/传感器立即可读

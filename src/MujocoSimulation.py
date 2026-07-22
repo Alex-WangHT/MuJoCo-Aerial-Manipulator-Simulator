@@ -1,16 +1,3 @@
-"""仿真线程。
-
-三线程模型：MujocoSimulation（物理，唯一访问 mjData）+
-MultirotorController / ManipulatorController（各自独立线程）。
-Simulation **不接收 Controller 对象**——它在编译后创建并暴露两条
-帧同步通道（``drone_channel`` / ``arm_channel``），控制器由外部
-（如 main.py）在 ``wait_ready()`` 之后构造到通道上并 ``start()``，
-最后 ``start_physics()`` 放行物理推进。
-
-主循环每帧：发布传感快照 -> 等控制器回执 -> 帧边界 flush 执行器缓冲
--> Environment.step()；无订阅者时退化为固定推力开环。
-"""
-
 from __future__ import annotations
 
 import threading
@@ -26,56 +13,20 @@ except Exception:  # pragma: no cover
 from .Messages import SensorData
 from .Telemetry import TelemetryBuffer
 
-from .AerialManipulator import AerialManipulator
 from .Environment import Environment
 from .FrameSync import ControllerChannel
+from .Manipulator import Manipulator
+from .Multirotor import Multirotor
+from .Robot import Robot
 
 
 class MujocoSimulation(threading.Thread):
-    """MuJoCo 仿真线程（仿真整体打包，仅对 Environment 编译）。
-
-    **输入为合并好的两大实例**：外部构造好的 ``Environment`` 与未编译的
-    ``AerialManipulator``（``compileModel=False``）；本线程把机器人挂进
-    场景统一编译（``Environment.attach_robot``），即"Environment 和
-    AerialManipulator 合并打包进 MujocoSimulation"。
-
-    主循环每帧推进 1 个物理步（1 ms），按 realTimeFactor 调速：
-
-        有控制器订阅时（帧同步协议，控制频率 = 物理帧率）：
-            drone_channel: publish(SensorData) -> wait_done -> flush 旋翼缓冲
-            arm_channel:   publish(ManipulatorSensorData) -> wait_done -> flush 舵机缓冲
-        无订阅者时（开环）：固定推力（缺省整机悬停推力）
-        -> TelemetryBuffer.append / TelemetryPublisher.publish（若配置）
-        -> Environment.step()
-
-    三线程接线（Simulation 不接收 Controller 对象）::
-
-        env = Environment()
-        uam = AerialManipulator(Multirotor(), Manipulator(), compileModel=False)
-        sim = MujocoSimulation(shutdown, env, uam, useViewer=False)
-        sim.start()
-        sim.wait_ready()                       # 场景编译完成，通道已暴露
-        drone = MultirotorController(sim.drone_channel, sim.uam.multirotor, ...)
-        arm = ManipulatorController(sim.arm_channel, sim.uam.manipulator, ...)
-        drone.start(); arm.start()             # 两个控制器各自独立线程
-        sim.start_physics()                    # 放行物理推进
-
-    ``wait_ready()`` 到 ``start_physics()`` 之间物理处于停放状态，
-    控制器构造（读视图初始状态）无数据竞争。
-
-    纯多旋翼构型：传入未带机械臂的 uam（``AerialManipulator(Multirotor())``）
-    即可，``arm_channel`` 自动为 ``None``。
-
-    跨进程输出：``telemetryTarget=(host, port)`` 指定后，每帧状态经
-    :class:`~src.TelemetryPublisher.TelemetryPublisher` 以 UDP+JSON 发往
-    另一进程；发送在独立线程完成，主循环只做一次 ``put_nowait``，零阻塞。
-    """
-
     def __init__(
         self,
         shutdownEvent: threading.Event,
         environment: Environment,
-        uam: AerialManipulator,
+        multirotor: Multirotor,
+        manipulator: Manipulator | None = None,
         telemetryBuffer: TelemetryBuffer | None = None,
         fixedRotorThrust: float | None = None,
         useViewer: bool = True,
@@ -88,12 +39,18 @@ class MujocoSimulation(threading.Thread):
             raise TypeError(
                 f"MujocoSimulation: environment 应为 Environment 实例，收到 {type(environment).__name__}"
             )
-        if not isinstance(uam, AerialManipulator):
+        if not isinstance(multirotor, Multirotor):
             raise TypeError(
-                f"MujocoSimulation: uam 应为 AerialManipulator 实例（compileModel=False），"
-                f"收到 {type(uam).__name__}"
+                f"MujocoSimulation: multirotor 应为 Multirotor 实例，收到 {type(multirotor).__name__}"
+            )
+        if manipulator is not None and not isinstance(manipulator, Manipulator):
+            raise TypeError(
+                f"MujocoSimulation: manipulator 应为 Manipulator 实例或 None，"
+                f"收到 {type(manipulator).__name__}"
             )
         self._shutdownEvent = shutdownEvent
+        self._multirotor = multirotor
+        self._manipulator = manipulator
         self._telemetryBuffer = telemetryBuffer
         self._fixedRotorThrust = fixedRotorThrust
         self._useViewer = useViewer
@@ -102,7 +59,7 @@ class MujocoSimulation(threading.Thread):
         self._telemetryRateHz = max(1e-3, float(telemetryRateHz))
 
         self.env: Environment | None = environment       # _build 中完成合并
-        self.uam: AerialManipulator | None = uam
+        self.uam: Robot | None = None                    # _build 中 attach 后获得
         self.drone_channel: ControllerChannel | None = None
         self.arm_channel: ControllerChannel | None = None   # 纯多旋翼构型为 None
         self._telemetryPublisher = None                  # TelemetryPublisher | None
@@ -124,14 +81,13 @@ class MujocoSimulation(threading.Thread):
     # ---------- 组装 ----------
 
     def _build(self) -> None:
-        """把外部传入的机器人合并进场景统一编译，随后创建帧同步通道。
+        """把外部传入的机器人组件合并进场景统一编译，随后创建帧同步通道。
 
-        本线程**只对 Environment 编译**：机器人须以 ``compileModel=False``
-        构建，唯一的编译入口是 ``Environment.attach_robot()`` ->
-        ``Environment.compile()``。
+        本线程**只对 Environment 编译**：组件须尚未绑定，唯一的编译入口是
+        ``Environment.attach_robot()`` -> ``Environment.compile()``。
         """
-        # Environment + AerialManipulator 合并打包（attach 内部会校验未编译）
-        self.env.attach_robot(self.uam)
+        # 组件组合 + 场景合并打包（attach 内部会校验组件未绑定）
+        self.uam = self.env.attach_robot(self._multirotor, self._manipulator)
 
         # 帧同步通道：控制器（独立线程）由外部在 wait_ready 后注册
         self.drone_channel = ControllerChannel()

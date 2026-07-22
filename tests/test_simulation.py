@@ -23,7 +23,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import numpy as np
 
 from src import (
-    AerialManipulator,
     Environment,
     Manipulator,
     MujocoSimulation,
@@ -34,12 +33,12 @@ from src import (
 
 
 def run_sim(seconds: float, droneTarget=None, **kwargs):
-    """组装场景+机器人并启动仿真线程；给 droneTarget 时接线一个位置闭环控制器线程。"""
+    """组装场景+机器人组件并启动仿真线程；给 droneTarget 时接线一个位置闭环控制器线程。"""
     shutdown = threading.Event()
     telemetry = TelemetryBuffer()
     env = Environment()
-    uam = AerialManipulator(Multirotor(), Manipulator(), compileModel=False)
-    sim = MujocoSimulation(shutdown, env, uam, telemetryBuffer=telemetry, useViewer=False, **kwargs)
+    sim = MujocoSimulation(shutdown, env, Multirotor(), Manipulator(),
+                           telemetryBuffer=telemetry, useViewer=False, **kwargs)
     sim.start()
     assert sim.wait_ready(timeout=10.0), "场景编译超时"
     drone_ctrl = None

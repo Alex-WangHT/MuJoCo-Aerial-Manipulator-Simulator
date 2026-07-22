@@ -4,7 +4,7 @@
     .venv/Scripts/python tests/test_environment.py
 
 验证内容：
-1. Environment 加载场景、AerialManipulator（未编译模式）attach 进场景统一编译；
+1. Environment 加载场景、attach_robot 组合 Multirotor + Manipulator 并统一编译；
 2. 机器人名称带场景前缀（uam/、uam/arm/），出生位姿正确；
 3. 障碍物按 obstacle_ 前缀自被发现且位置与 MJCF 一致；
 4. 场景中悬停 0.5 s 高度保持（MultirotorController 独立线程经帧同步通道驱动）；
@@ -21,7 +21,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import numpy as np
 
 from src import (
-    AerialManipulator,
     ControllerChannel,
     Environment,
     Manipulator,
@@ -38,8 +37,7 @@ def main() -> None:
     # ---------- 1. 组合编译与前缀检查 ----------
     print("\n[1] 场景组合编译")
     env = Environment()
-    uam = AerialManipulator(Multirotor(), Manipulator(), compileModel=False)
-    env.attach_robot(uam)
+    uam = env.attach_robot(Multirotor(), Manipulator())
 
     assert uam.model is env.model, "机器人应共享场景模型"
     rotor_names = list(uam.multirotor.rotors)

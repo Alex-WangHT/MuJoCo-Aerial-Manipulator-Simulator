@@ -25,7 +25,6 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import numpy as np
 
 from src import (
-    AerialManipulator,
     ControllerChannel,
     Environment,
     Manipulator,
@@ -42,8 +41,7 @@ DT = 0.001
 def build_scene():
     """构建场景 + 机器人（与 MujocoSimulation._build 相同的组装路径）。"""
     env = Environment()
-    uam = AerialManipulator(Multirotor(), Manipulator(), compileModel=False)
-    env.attach_robot(uam)
+    uam = env.attach_robot(Multirotor(), Manipulator())
     return env, uam
 
 
@@ -146,8 +144,8 @@ def main() -> None:
     shutdown = threading.Event()
     telemetry = TelemetryBuffer()
     env_sim = Environment()
-    uam_sim = AerialManipulator(Multirotor(), Manipulator(), compileModel=False)
-    sim = MujocoSimulation(shutdown, env_sim, uam_sim, telemetryBuffer=telemetry, useViewer=False)
+    sim = MujocoSimulation(shutdown, env_sim, Multirotor(), Manipulator(),
+                           telemetryBuffer=telemetry, useViewer=False)
     sim.start()
     assert sim.wait_ready(timeout=10.0), "场景编译超时"
     drone_ctrl2 = MultirotorController(sim.drone_channel, sim.uam.multirotor,

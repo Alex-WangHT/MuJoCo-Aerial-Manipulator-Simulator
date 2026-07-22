@@ -1,10 +1,11 @@
-"""AerialManipulator 组合与动力学耦合冒烟测试。
+"""Robot（Multirotor + Manipulator 整机）组合与动力学耦合冒烟测试。
 
 直接运行：
-    .venv/Scripts/python tests/test_aerial_manipulator.py
+    .venv/Scripts/python tests/test_robot.py
 
 验证内容：
-1. 两份 MJCF 经 mjSpec.attach 组合编译成功，名称前缀化正确，自省结果完整；
+1. 组件经 Environment.attach_robot 两级 attach 组合编译成功，名称前缀化
+   正确（uam/、uam/arm/），自省结果完整；
 2. 闭环悬停 + 机械臂保持零位时，平台位置/姿态稳定（SO-ARM100 网格臂的
    质心偏离关节轴线，开环悬停物理上不可行，故悬停用 MultirotorController
    独立线程，经帧同步通道驱动）；
@@ -21,8 +22,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 import numpy as np
 
 from src import (
-    AerialManipulator,
     ControllerChannel,
+    Environment,
     Manipulator,
     Multirotor,
     MultirotorController,
@@ -33,18 +34,21 @@ DT = 0.001
 
 def main() -> None:
     print("=" * 64)
-    print("AerialManipulator 组合冒烟测试")
+    print("Robot 整机组合冒烟测试（经 Environment 组装）")
     print("=" * 64)
 
-    uam = AerialManipulator(Multirotor(), Manipulator())
-    model, data = uam.model, uam.data
+    env = Environment()
+    uam = env.attach_robot(Multirotor(), Manipulator())
+    model, data = env.model, env.data
 
     # ---------- 1. 结构与自省检查 ----------
     print("\n[1] 组合编译与名称自省")
     assert abs(model.opt.timestep - DT) < 1e-12, f"timestep 应为 {DT}，实际 {model.opt.timestep}"
     assert uam.multirotor.n_rotors == 6, f"旋翼数应为 6，实际 {uam.multirotor.n_rotors}"
     assert uam.manipulator.n_joints == 3, f"机械臂关节数应为 3，实际 {uam.manipulator.n_joints}"
-    assert all(n.startswith("arm/") for n in uam.manipulator.joint_names), "机械臂关节应带 arm/ 前缀"
+    assert all(n.startswith("uam/arm/") for n in uam.manipulator.joint_names), (
+        f"机械臂关节应带 uam/arm/ 前缀: {uam.manipulator.joint_names}"
+    )
 
     total_mass = float(model.body_mass.sum())
     print(f"    整机总质量: {total_mass:.3f} kg")
@@ -77,7 +81,7 @@ def main() -> None:
             drone_channel.mailbox.publish(uam.multirotor.get_state())
             drone_channel.mailbox.wait_done()
             drone_channel.flush()
-            uam.step()
+            env.step()
 
     try:
         closed_loop(2.0)

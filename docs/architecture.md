@@ -23,8 +23,8 @@
 │   ├── Actuators.py               # RotorActuator / ServoActuator 执行器缓冲
 │   ├── Multirotor.py              # 多旋翼组件（自读 MJCF，set_actuator/get_sensor）
 │   ├── Manipulator.py             # 机械臂组件（自读 MJCF，同构）
-│   ├── AerialManipulator.py       # 机器人组合器（输入为两组件实例）
-│   ├── Environment.py             # 场景组合器（最顶层）
+│   ├── Robot.py                   # 已挂载机器人视图句柄（attach_robot 返回值）
+│   ├── Environment.py             # 场景组合器（唯一组合器，两级 attach）
 │   ├── MultirotorController.py    # 多旋翼控制器线程基类（默认串级 PID + 混控）
 │   ├── ManipulatorController.py   # 机械臂控制器线程基类（默认关节/末端 DLS）
 │   └── MujocoSimulation.py        # 仿真线程（仅对 Environment 编译，独占 mjData）
@@ -44,9 +44,9 @@ main.py（主线程，接线）
   ├── threading.Event              全局退出信号
   ├── TelemetryBuffer              遥测缓冲（仿真线程写，GCS 读）
   ├── MujocoSimulation (thread)    唯一访问 mjData 的线程；输入 Environment +
-  │     │                          AerialManipulator 实例，合并后仅对 Environment 编译
-  │     ├── Environment            加载 environment.xml，最顶层组合器，统一编译
-  │     │     └── AerialManipulator (compileModel=False)
+  │     │                          机器人组件实例，合并后仅对 Environment 编译
+  │     ├── Environment            加载 environment.xml，唯一组合器，统一编译
+  │     │     └── attach_robot(Multirotor, Manipulator) -> Robot 句柄
   │     │           ├── Multirotor   读 multirotor.xml（bind namespace="uam/"）
   │     │           └── Manipulator  读 Manipulator.xml（bind namespace="uam/arm/"）
   │     ├── drone_channel          ControllerChannel（编译后暴露）
@@ -60,8 +60,8 @@ main.py（主线程，接线）
 
 ```python
 env = Environment()
-uam = AerialManipulator(Multirotor(), Manipulator(), compileModel=False)
-sim = MujocoSimulation(shutdown, env, uam, useViewer=False)   # 合并打包
+sim = MujocoSimulation(shutdown, env, Multirotor(), Manipulator(),
+                       useViewer=False)                   # 合并打包
 sim.start()
 sim.wait_ready()                       # 场景编译完成，通道已暴露
 drone = MultirotorController(sim.drone_channel, sim.uam.multirotor, targetPosition=...)
@@ -85,9 +85,9 @@ sim.start_physics()                    # 放行物理推进
 
 ```text
 environment.xml (父)
-  └── Environment.attach_robot: attach(uam_spec, site="uam_spawn", prefix="uam/")
+  └── Environment.attach_robot 第二级: attach(multirotor_spec, site="uam_spawn", prefix="uam/")
         multirotor.xml (Multirotor 读取)
-          └── AerialManipulator: attach(arm_spec, site="manipulator_mount", prefix="arm/")
+          └── Environment.attach_robot 第一级: attach(manipulator_spec, site="manipulator_mount", prefix="arm/")
                 Manipulator.xml (Manipulator 读取)
 ```
 
@@ -97,9 +97,10 @@ environment.xml (父)
   site 等约定信息并校验命名约定；统一编译后由组合器回调 `bind(model, data,
   namespace)`，把名称解析为共享模型中的 id 与地址，此后 `set_actuator` /
   `get_sensor` 等读写接口可用
-- `AerialManipulator` 两种模式：独立运行（`compileModel=True`，自身编译、
-  无前缀）或放入场景（`compileModel=False`，由 Environment 编译后经
-  `bind_views(model, data, namespace)` 绑定组件）
+- `Environment.attach_robot()` 一次调用完成两级 attach 并统一编译，返回
+  `Robot` 句柄：成组携带绑定后的 `multirotor` / `manipulator` 组件视图，
+  提供 `has_manipulator` / `hover_thrust()` 等整机便捷量；
+  `env.robots` 持有全部已挂载机器人
 - 挂载关系全部声明在 MJCF：机械臂固连位置 = multirotor.xml 中
   `manipulator_mount` site（机体系 `pos="0 0 -0.05"`）；机器人出生位置 =
   environment.xml 中 `uam_spawn` site——Python 中不硬编码坐标
@@ -140,7 +141,7 @@ environment.xml (父)
 | 方法 | 说明 |
 |---|---|
 | `__init__(environmentPath=None)` | 加载场景 MJCF（默认 models/environment.xml） |
-| `attach_robot(uam, site="uam_spawn", prefix="uam/")` | 挂载未编译机器人并统一编译 |
+| `attach_robot(multirotor, manipulator=None, site="uam_spawn", prefix="uam/", mountSite="manipulator_mount", armPrefix="arm/")` | 组合机器人组件（两级 attach）挂到场景并统一编译，返回 `Robot` 句柄 |
 | `compile()` | 编译场景共享模型，绑定全部机器人组件，刷新障碍物表 |
 | `step(n_steps=1)` / `reset()` | 推进 / 重置（mj_resetData + mj_forward） |
 | `get_obstacle_positions()` | `obstacle_` 前缀 geom 的世界坐标 |
@@ -149,19 +150,15 @@ environment.xml (父)
 
 属性：`model`、`data`、`robots`、`obstacles`。
 
-### `AerialManipulator.py` — class `AerialManipulator`
+### `Robot.py` — class `Robot`
 
-机器人（UAM）组合器，**输入为组件实例**。
+已挂载机器人的视图句柄，`Environment.attach_robot()` 的返回类型
+（同入 `Environment.robots`）。只成组携带绑定后的组件视图，
+不含任何组合/编译逻辑。
 
-| 方法 | 说明 |
-|---|---|
-| `__init__(multirotor, manipulator=None, mountSite="manipulator_mount", armPrefix="arm/", compileModel=True)` | 接收已读 MJCF 的 `Multirotor` / `Manipulator` 实例，attach 打包为整机 spec；`manipulator=None` 即纯多旋翼构型 |
-| `compile()` | 独立模式：编译自身 spec 并绑定无前缀组件 |
-| `bind_views(model, data, namespace="")` | 绑定组件到（场景共享的）模型 |
-| `step(n_steps=1)` / `reset()` | 推进 / 重置（共享模型时 reset 会重置整个场景） |
-| `hover_thrust()` | 整机悬停单旋翼推力：总质量 × 9.81 / 旋翼数 |
-
-属性：`spec`、`model`、`data`、`multirotor`、`manipulator`、`has_manipulator`。
+属性：`multirotor`、`manipulator`（纯多旋翼构型为 `None`）、`prefix`、
+`has_manipulator`、`model`、`data`。
+方法：`hover_thrust()`（整机悬停单旋翼推力：总质量 × 9.81 / 旋翼数）。
 
 ### `Multirotor.py` — class `Multirotor`
 
@@ -235,7 +232,7 @@ environment.xml (父)
 继承基类、只重写控制函数；在 `sim.wait_ready()` 后构造并 `start()`：
 
 ```python
-from src import (AerialManipulator, Environment, Manipulator, Multirotor,
+from src import (Environment, Manipulator, Multirotor,
                  MujocoSimulation, MultirotorController, ManipulatorController)
 
 class MyDroneController(MultirotorController):
@@ -252,8 +249,7 @@ class MyArmController(ManipulatorController):
         return [0.3, -0.2, 0.3]
 
 env = Environment()
-uam = AerialManipulator(Multirotor(), Manipulator(), compileModel=False)
-sim = MujocoSimulation(shutdown, env, uam, useViewer=False)
+sim = MujocoSimulation(shutdown, env, Multirotor(), Manipulator(), useViewer=False)
 sim.start(); sim.wait_ready()
 drone = MyDroneController(sim.drone_channel, sim.uam.multirotor, targetPosition=[0, 0, 1.8])
 arm = MyArmController(sim.arm_channel, sim.uam.manipulator)
@@ -267,16 +263,17 @@ sim.start_physics()
 
 ### `MujocoSimulation.py` — class `MujocoSimulation(threading.Thread)`
 
-仿真整体打包。**输入为外部构造好的 `Environment` 与未编译
-`AerialManipulator`（`compileModel=False`）两大实例**，本线程把机器人
-挂进场景统一编译（唯一编译入口是 `Environment.attach_robot()` ->
-`Environment.compile()`），**不接收 Controller 对象**。构造参数：
+仿真整体打包。**输入为外部构造好的 `Environment` 与未绑定的机器人组件实例
+（`Multirotor` + 可选 `Manipulator`）**，本线程把组件组合挂进场景统一编译
+（唯一编译入口是 `Environment.attach_robot()` -> `Environment.compile()`，
+编译后 `sim.uam` 为 `Robot` 句柄），**不接收 Controller 对象**。构造参数：
 
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `shutdownEvent` | 必填 | 全局退出信号 |
 | `environment` | 必填 | `Environment` 实例（场景） |
-| `uam` | 必填 | `AerialManipulator` 实例（`compileModel=False`；纯多旋翼构型时 `arm_channel` 为 None） |
+| `multirotor` | 必填 | `Multirotor` 实例（未绑定） |
+| `manipulator` | None | `Manipulator` 实例（未绑定）；纯多旋翼构型时 `arm_channel` 为 None |
 | `telemetryBuffer` | None | 遥测输出（供 GCS） |
 | `fixedRotorThrust` | None | 固定推力开环 [N]；None 且无订阅者时用 `hover_thrust()` |
 | `useViewer` | True | 是否打开 passive viewer（False 为无头） |
@@ -324,8 +321,8 @@ python main.py --no-arm                 纯多旋翼构型
 python main.py --env <场景.xml> --rtf 1.0
 ```
 
-调用链：`argparse -> Event + TelemetryBuffer -> Environment + 组件组装
-AerialManipulator -> MujocoSimulation(env, uam).start() -> sim.wait_ready()
+调用链：`argparse -> Event + TelemetryBuffer -> Environment + 机器人组件
+-> MujocoSimulation(env, Multirotor(), Manipulator()).start() -> sim.wait_ready()
 -> 构造/启动控制器线程 -> sim.start_physics() -> 主线程等待 ->
 退出时 shutdown + join（仿真线程 + 控制器线程）`。
 
@@ -333,7 +330,7 @@ AerialManipulator -> MujocoSimulation(env, uam).start() -> sim.wait_ready()
 
 | 文件 | 覆盖 |
 |---|---|
-| tests/test_aerial_manipulator.py | 机器人组合、名称前缀、通道驱动悬停平衡、臂-平台耦合（独立模式） |
+| tests/test_robot.py | 整机组合（经场景组装）、名称前缀、通道驱动悬停平衡、臂-平台耦合 |
 | tests/test_environment.py | 场景组合、出生位姿、障碍物自省、通道驱动悬停、下落接触交互 |
 | tests/test_simulation.py | 三线程无头运行：闭环悬停/爬升、开环下落、仿真与控制器线程退出 |
 | tests/test_controllers.py | 混控构建、位置闭环、关节/末端（DLS）控制、三线程集成、用户自定义子类、冻结保护 |

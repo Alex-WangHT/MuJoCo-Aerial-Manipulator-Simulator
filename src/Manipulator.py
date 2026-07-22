@@ -5,10 +5,9 @@
 1. **读取 MJCF**（``__init__``）：``MjSpec.from_file`` 加载机械臂 MJCF，
    立即从 spec 自省关节、舵机 actuator、末端 site 与 sensor 等约定信息——
    此时模型尚未编译，不依赖任何 MjModel/MjData；
-2. **绑定编译产物**（``bind``）：由 ``AerialManipulator.compile()`` 或
-   ``Environment.compile()`` 在统一编译后回调，把带命名空间前缀的名称
-   解析为共享 MjModel/MjData 中的 id 与地址，此后 ``set_actuator`` /
-   ``get_sensor`` 等读写接口可用。
+2. **绑定编译产物**（``bind``）：由 ``Environment.compile()`` 在统一编译后
+   回调，把带命名空间前缀的名称解析为共享 MjModel/MjData 中的 id 与地址，
+   此后 ``set_actuator`` / ``get_sensor`` 等读写接口可用。
 """
 
 from __future__ import annotations
@@ -79,8 +78,7 @@ class Manipulator:
     def bind(self, model, data, namespace: str = "arm/") -> None:
         """绑定到统一编译出的共享 MjModel/MjData，解析全部 id 与地址。
 
-        ``namespace`` 为组合时的名称前缀（机器人内独立编译为 ``"arm/"``，
-        场景内为 ``"uam/arm/"``）。
+        ``namespace`` 为组合时的名称前缀（场景内为 ``"uam/arm/"``）。
         """
         self._model = model
         self._data = data
@@ -126,8 +124,8 @@ class Manipulator:
     def _require_bound(self) -> None:
         if self._model is None or self._data is None:
             raise RuntimeError(
-                "Manipulator 尚未绑定编译产物：请经 AerialManipulator.compile() "
-                "或 Environment.compile() 统一编译后再调用"
+                "Manipulator 尚未绑定编译产物：请经 Environment.attach_robot() "
+                "挂载编译后再调用"
             )
 
     # ---------- 属性 ----------

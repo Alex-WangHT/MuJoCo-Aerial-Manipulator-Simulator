@@ -2,11 +2,12 @@
   <!--
     MuJoCo 场景环境（Environment）：飞行场地。
 
-    本文件是“父模型”：由 src/Environment.py 加载，机器人（AerialManipulator
-    的 spec）通过 mjSpec.attach 挂到 uam_spawn site 上组合编译。
+    本文件是“父模型”：由 src/Environment.py 加载，机器人组件（Multirotor +
+    可选 Manipulator 组合后的 spec）通过 mjSpec.attach 挂到 uam_spawn site 上
+    组合编译。
 
     约定（供 src/Environment.py 按名称自省）：
-    - 机器人挂载点 site:  uam_spawn（AerialManipulator 以此为放置位置 attach）
+    - 机器人挂载点 site:  uam_spawn（attach_robot 以此为放置位置 attach）
     - 障碍物 geom:        名称以 obstacle_ 前缀开头（位置/接触交互查询）
     - 着陆台 geom:        landing_pad
     - 地板 geom:          floor

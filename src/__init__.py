@@ -6,14 +6,15 @@
 - ``Manipulator``       机械臂：读取 Manipulator.xml，同样模式
 
 组合层:
-- ``AerialManipulator`` 机器人组合器（输入为两组件实例，attach 打包编译视图）
-- ``Environment``       MuJoCo 场景环境（地板/障碍物，最顶层组合器，
-                        AerialManipulator 挂进来合体编译）
+- ``Environment``       MuJoCo 场景环境（地板/障碍物，唯一组合器：
+                        attach_robot 接收组件实例，两级 attach 后合体编译）
+- ``Robot``             已挂载机器人的视图句柄（attach_robot 返回值，
+                        成组携带 multirotor/manipulator 组件视图）
 
 线程/通信层（三线程模型）:
-- ``MujocoSimulation``  仿真线程：输入 Environment + AerialManipulator 实例
+- ``MujocoSimulation``  仿真线程：输入 Environment + 机器人组件实例
                         （合并打包，仅对 Environment 编译），唯一访问 mjData；
-                        编译后暴露 drone_channel / arm_channel
+                        编译后暴露 drone_channel / arm_channel 与 sim.uam 句柄
 - ``MultirotorController``   多旋翼控制器线程基类；重写 control()
 - ``ManipulatorController``  机械臂控制器线程基类；重写 compute_joint_targets()
 - ``FrameSync``         FrameMailbox 帧同步邮箱 + ControllerChannel 通道
@@ -29,9 +30,10 @@
 
     MujocoSimulation (threading.Thread)      仅编译 Environment，独占 mjData
       └── Environment              加载 models/environment.xml，统一编译
-            └── AerialManipulator  compileModel=False，挂到 uam_spawn
+            └── attach_robot(Multirotor, Manipulator)  两级 attach，挂到 uam_spawn
                   ├── Multirotor   读 multirotor.xml（bind namespace="uam/"）
                   └── Manipulator  读 Manipulator.xml（bind namespace="uam/arm/")
+                        （attach 返回值 Robot 句柄成组携带两组件视图）
 
     MultirotorController (thread) ──drone_channel──> 帧同步邮箱 + 旋翼执行器缓冲
     ManipulatorController (thread) ──arm_channel──> 帧同步邮箱 + 舵机执行器缓冲
@@ -65,7 +67,7 @@ from .FrameSync import ControllerChannel, FrameMailbox  # noqa: E402
 from .Actuators import RotorActuator, ServoActuator  # noqa: E402
 from .Multirotor import Multirotor  # noqa: E402
 from .Manipulator import Manipulator  # noqa: E402
-from .AerialManipulator import AerialManipulator  # noqa: E402
+from .Robot import Robot  # noqa: E402
 from .Environment import Environment  # noqa: E402
 from .MultirotorController import MultirotorController  # noqa: E402
 from .ManipulatorController import ManipulatorController  # noqa: E402
@@ -74,7 +76,7 @@ from .MujocoSimulation import MujocoSimulation  # noqa: E402
 __all__ = [
     "Multirotor",
     "Manipulator",
-    "AerialManipulator",
+    "Robot",
     "Environment",
     "MultirotorController",
     "ManipulatorController",
