@@ -22,10 +22,10 @@ try:
 except Exception:  # pragma: no cover - 允许未安装 mujoco 时导入本模块
     mujoco = None
 
-from . import _MODELS_DIR
-from .Messages import SensorData
+from .. import _MODELS_DIR
+from ..utils.Messages import SensorData
 
-from . import quaternionToEuler
+from .. import quaternionToEuler
 
 
 class Multirotor:

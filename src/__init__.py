@@ -60,18 +60,18 @@ def quaternionToEuler(q) -> np.ndarray:
     return np.array([roll, pitch, yaw], dtype=float)
 
 
-from .Messages import ControlInput, ManipulatorSensorData, SensorData  # noqa: E402
-from .Telemetry import TelemetryBuffer  # noqa: E402
-from .TelemetryPublisher import TelemetryPublisher  # noqa: E402
-from .FrameSync import ControllerChannel, FrameMailbox  # noqa: E402
-from .Actuators import RotorActuator, ServoActuator  # noqa: E402
-from .Multirotor import Multirotor  # noqa: E402
-from .Manipulator import Manipulator  # noqa: E402
-from .Robot import Robot  # noqa: E402
-from .Environment import Environment  # noqa: E402
-from .MultirotorController import MultirotorController  # noqa: E402
-from .ManipulatorController import ManipulatorController  # noqa: E402
-from .MujocoSimulation import MujocoSimulation  # noqa: E402
+from .utils.Messages import ControlInput, ManipulatorSensorData, SensorData  # noqa: E402
+from .utils.Telemetry import TelemetryBuffer  # noqa: E402
+from .utils.TelemetryPublisher import TelemetryPublisher  # noqa: E402
+from .utils.FrameSync import ControllerChannel, FrameMailbox  # noqa: E402
+from .utils.Actuators import RotorActuator, ServoActuator  # noqa: E402
+from .simulation.Multirotor import Multirotor  # noqa: E402
+from .simulation.Manipulator import Manipulator  # noqa: E402
+from .simulation.Robot import Robot  # noqa: E402
+from .simulation.Environment import Environment  # noqa: E402
+from .controller.MultirotorController import MultirotorController  # noqa: E402
+from .controller.ManipulatorController import ManipulatorController  # noqa: E402
+from .simulation.MujocoSimulation import MujocoSimulation  # noqa: E402
 
 __all__ = [
     "Multirotor",

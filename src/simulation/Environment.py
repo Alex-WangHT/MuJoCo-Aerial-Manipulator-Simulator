@@ -17,7 +17,7 @@ try:
 except Exception:  # pragma: no cover
     mujoco = None
 
-from . import _MODELS_DIR
+from .. import _MODELS_DIR
 from .Manipulator import Manipulator
 from .Multirotor import Multirotor
 from .Robot import Robot

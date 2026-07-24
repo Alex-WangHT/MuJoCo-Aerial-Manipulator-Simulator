@@ -10,11 +10,11 @@ try:
 except Exception:  # pragma: no cover
     mujoco = None
 
-from .Messages import SensorData
-from .Telemetry import TelemetryBuffer
+from ..utils.Messages import SensorData
+from ..utils.Telemetry import TelemetryBuffer
 
 from .Environment import Environment
-from .FrameSync import ControllerChannel
+from ..utils.FrameSync import ControllerChannel
 from .Manipulator import Manipulator
 from .Multirotor import Multirotor
 from .Robot import Robot
@@ -81,13 +81,14 @@ class MujocoSimulation(threading.Thread):
     # ---------- 组装 ----------
 
     def _build(self) -> None:
-        """把外部传入的机器人组件合并进场景统一编译，随后创建帧同步通道。
+        """把外部传入的机器人合并进场景统一编译，随后创建帧同步通道。
 
-        本线程**只对 Environment 编译**：组件须尚未绑定，唯一的编译入口是
-        ``Environment.attach_robot()`` -> ``Environment.compile()``。
+        本线程**只对 Environment 编译**：机器人须以 ``compileModel=False``
+        构建，唯一的编译入口是 ``Environment.attach_robot()`` ->
+        ``Environment.compile()``。
         """
-        # 组件组合 + 场景合并打包（attach 内部会校验组件未绑定）
-        self.uam = self.env.attach_robot(self._multirotor, self._manipulator)
+        # Environment + AerialManipulator 合并打包（attach 内部会校验未编译）
+        self.env.attach_robot(self.uam)
 
         # 帧同步通道：控制器（独立线程）由外部在 wait_ready 后注册
         self.drone_channel = ControllerChannel()
@@ -134,7 +135,7 @@ class MujocoSimulation(threading.Thread):
         """启动 UDP 遥测发布器（独立线程，主循环只做非阻塞入队）。"""
         if self._telemetryTarget is None:
             return
-        from .TelemetryPublisher import TelemetryPublisher  # 延迟导入
+        from ..utils.TelemetryPublisher import TelemetryPublisher  # 延迟导入
 
         assert self.env is not None
         host, port = self._telemetryTarget

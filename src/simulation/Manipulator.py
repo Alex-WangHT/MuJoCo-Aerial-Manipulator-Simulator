@@ -21,8 +21,8 @@ try:
 except Exception:  # pragma: no cover
     mujoco = None
 
-from . import _MODELS_DIR
-from .Messages import ManipulatorSensorData
+from .. import _MODELS_DIR
+from ..utils.Messages import ManipulatorSensorData
 
 
 class Manipulator:
