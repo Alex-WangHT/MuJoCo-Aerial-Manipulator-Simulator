@@ -1,20 +1,20 @@
-# uamsim — MuJoCo 空中机械臂仿真器
+# UAMSim — MuJoCo 空中机械臂仿真器
 
-可安装的 Python 包，面向多旋翼 + 机械臂（UAM）的 MuJoCo 仿真与控制框架。
+面向多旋翼 + 机械臂（UAM, Unmanned Aerial Manipulator）的 MuJoCo 仿真与控制框架。采用**三线程实时架构**（仿真线程 + 多旋翼控制器线程 + 机械臂控制器线程），通过帧同步机制保证控制频率与物理帧严格对齐。
+
+---
 
 ## 安装
 
 ```bash
+# 基础安装
 pip install -e .
-```
 
-或带开发依赖：
-
-```bash
+# 带开发依赖（lint / format / test）
 pip install -e ".[dev]"
 ```
 
-## 依赖
+### 系统要求
 
 - Python >= 3.10
 - numpy >= 1.24
@@ -22,125 +22,145 @@ pip install -e ".[dev]"
 - glfw >= 2.7
 - matplotlib >= 3.8
 
-## 快速开始
+---
+
+## 30 秒快速开始
 
 ```python
 import threading
 import numpy as np
-import uamsim as ua
+import UAMSim as ua
 
 
 class HoverController(ua.MultirotorController):
     """自定义控制器：只需重写 controller() 方法。"""
 
-    def controller(self, feedback, target_pos, hover):
+    def controller(self, feedback, target_pos, kp, hover):
         err = target_pos - feedback.dronePosition
-        thrust = hover + 4.0 * err[2]
+        thrust = hover + kp * err[2]
         return np.full(self._multirotor.n_rotors, thrust)
 
 
-# 1. 创建场景
-env = ua.Environment()
-
-# 2. 启动仿真线程
+# 1. 加载场景与机器人模型
 shutdown = threading.Event()
-sim = ua.MujocoSimulation(
-    shutdown, env, ua.Multirotor(), None,
-    use_viewer=True, real_time_factor=1.0,
-)
-sim.start()
-sim.wait_ready()
+env = ua.Environment("path/to/environment.xml")
+multirotor = ua.Multirotor("path/to/multirotor.xml")
 
-# 3. 创建并启动控制器
+# 2. 启动仿真线程（自动组合、编译、创建帧同步通道）
+sim = ua.MujocoSimulation(shutdown, env, multirotor, use_viewer=True)
+sim.start()
+sim.wait_ready()          # 等待编译完成、通道就绪
+
+# 3. 构造并启动控制器（自动注册到帧同步通道）
 ctrl = HoverController(
     sim.uam.multirotor, sim.drone_channel, shutdown,
     target_pos=np.array([0.0, 0.0, 1.5]),
+    kp=4.0,
     hover=sim.uam.hover_thrust(),
 )
 ctrl.start()
 
-# 4. 放行物理
+# 4. 放行物理推进
 sim.start_physics()
+
+# 5. 运行一段时间后退出
+# shutdown.set()   # 设置退出标志，仿真与控制器自动停止
 ```
 
-完整示例见 `examples/hover_example.py`。
+完整示例见 [`examples/demo.py`](examples/demo.py)。
+
+---
+
+## 运行示例
+
+```bash
+# 纯多旋翼悬停演示（3 秒，GUI）
+python examples/demo.py
+
+# 完整集成演示：级联 PID + 机械臂 ±1 rad 摆动（9 秒）
+python examples/demo.py --full
+
+# 无头模式（不开 viewer，5× 加速）
+python examples/demo.py --full --headless
+```
+
+---
 
 ## 包结构
 
 ```text
-uamsim/
+UAMSim/
 ├── __init__.py                    # 公共 API 导出
 ├── simulation/
 │   ├── environment.py             # Environment：场景组合器
 │   ├── multirotor.py              # Multirotor：多旋翼平台组件
 │   ├── manipulator.py             # Manipulator：机械臂组件
 │   ├── robot.py                   # Robot：已挂载机器人的视图句柄
-│   └── mujoco_simulation.py       # MujocoSimulation：仿真线程
+│   └── mujoco_simulation.py       # MujocoSimulation：仿真线程（三线程核心）
 ├── controllers/
-│   ├── multirotor_controller.py   # 多旋翼控制器线程基类
-│   └── manipulator_controller.py  # 机械臂控制器线程基类
-├── utils/
-│   ├── actuators.py               # RotorActuator / ServoActuator
-│   ├── frame_sync.py              # FrameMailbox / ControllerChannel
-│   ├── perception_bus.py          # SensorSnapshot / PerceptionSource
-│   ├── telemetry.py               # TelemetryBuffer
-│   └── telemetry_publisher.py     # TelemetryPublisher
-└── models/                        # MJCF 模型文件
-    ├── multirotor.xml
-    ├── Manipulator.xml
-    └── environment.xml
+│   ├── multirotor_controller.py   # MultirotorController：多旋翼控制器基类
+│   └── manipulator_controller.py  # ManipulatorController：机械臂控制器基类
+└── utils/
+    ├── actuators.py               # RotorActuator / ServoActuator 执行器缓冲
+    ├── frame_sync.py              # FrameMailbox / ControllerChannel 帧同步
+    ├── perception_bus.py          # SensorSnapshot / PerceptionSource / UDP 感知通道
+    ├── telemetry.py               # TelemetryBuffer 遥测缓存
+    └── telemetry_publisher.py     # TelemetryPublisher UDP 遥测发布
+
+examples/
+├── demo.py                        # 综合演示脚本（悬停 / 级联 PID + 机械臂）
+└── models/
+    ├── environment.xml            # 场景 MJCF（地板、灯光、障碍物）
+    ├── multirotor.xml             # 六旋翼平台 MJCF
+    └── Manipulator.xml            # 三自由度机械臂 MJCF
 ```
+
+---
 
 ## 核心设计
 
 ### 三线程模型
 
-- **仿真线程**（`MujocoSimulation`）：唯一访问 `mjData` 的线程，逐帧推进物理
-- **多旋翼控制器线程** / **机械臂控制器线程**：各自独立线程，只读写通道对象
+| 线程 | 职责 | 数据访问 |
+|------|------|----------|
+| **仿真线程** (`MujocoSimulation`) | 唯一访问 `mjData`，逐帧推进物理、发布传感快照、flush 执行器缓冲 | 读写 `mjData` |
+| **多旋翼控制器线程** | 接收快照 → 计算推力 → 写入 `RotorActuator` 缓冲 | 只读快照，不写 `mjData` |
+| **机械臂控制器线程** | 接收快照 → 计算关节目标角 → 写入 `ServoActuator` 缓冲 | 只读快照，不写 `mjData` |
 
 ### 自定义控制器
 
-唯一需要重写的是 `controller()` 方法：
+唯一需要重写的是 `controller()` 方法。构造参数通过 `**kwargs` 逐帧透传：
 
 ```python
-class MyController(ua.MultirotorController):
-    def controller(self, feedback, **params):
-        # feedback: SensorSnapshot（含位置、速度、姿态、角速度等）
-        # params: 构造时传入的自定义参数
-        return np.full(self._multirotor.n_rotors, 3.0)  # 各旋翼推力 [N]
+class MyDroneCtrl(ua.MultirotorController):
+    def controller(self, feedback, target, kp):
+        err = target - feedback.dronePosition
+        return self.uam.hover_thrust() + kp * err[2]
+
+ctrl = MyDroneCtrl(sim.uam.multirotor, sim.drone_channel,
+                   target=[0, 0, 1.5], kp=2.0)
+ctrl.start()
 ```
 
-自定义参数通过构造函数 kwargs 透传：
+运行期间可随时更新目标参数（下一帧生效）：
 
 ```python
-ctrl = MyController(
-    multirotor, channel, shutdown,
-    target_pos=[0, 0, 1.5], kp=4.0, kd=3.0,
-)
+ctrl.set_target(target=[0, 0, 2.0], kp=5.0)
 ```
 
 ### 构型灵活
 
 - **纯多旋翼**：`MujocoSimulation(..., multirotor, None)`
 - **多旋翼 + 机械臂**：`MujocoSimulation(..., multirotor, manipulator)`
-- **自定义模型路径**：`Multirotor(multirotor_path="path/to/my_multirotor.xml")`
+- **自定义模型**：传入自己的 MJCF 路径即可
 
-## 测试
+---
 
-```bash
-# 场景组合与交互测试
-python tests/test_environment.py
+## 详细文档
 
-# 机器人整机组合测试
-python tests/test_robot.py
+使用指南、MJCF 命名约定、API 参考等详见 [`DOCUMENT.md`](DOCUMENT.md)。
 
-# 仿真线程三线程模型测试
-python tests/test_simulation.py
-
-# 整机集成测试（级联 PID + 机械臂摆动）
-python tests/test_integrated.py           # GUI 模式
-python tests/test_integrated.py --headless  # 无头模式
-```
+---
 
 ## 许可证
 
