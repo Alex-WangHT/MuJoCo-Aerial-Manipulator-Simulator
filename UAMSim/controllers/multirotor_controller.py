@@ -84,6 +84,13 @@ class MultirotorController(threading.Thread):
         self._shutdown_event = shutdown_event if shutdown_event is not None else threading.Event()
         self.params = dict(controller_params)
 
+        # ---- 实时目标参数（线程安全，由 set_target 更新） ----
+        self._target: dict = {}
+        self._target_lock = threading.Lock()
+        self._channel = channel
+        self._shutdown_event = shutdown_event if shutdown_event is not None else threading.Event()
+        self.params = dict(controller_params)
+
         # ---- 自动注册控制输出：每个旋翼一个执行器缓冲，注册到通道 ----
         model, data = multirotor.model, multirotor.data
         self.rotors: list[RotorActuator] = [
@@ -100,6 +107,27 @@ class MultirotorController(threading.Thread):
 
         # ---- 可用传感器清单（MJCF 声明），反馈内容由用户在 controller() 里自取 ----
         self.sensor_names: list[str] = multirotor.sensor_names
+
+    # ---------- 实时目标更新 ----------
+
+    def set_target(self, **kwargs) -> None:
+        """线程安全地更新控制目标参数。
+
+        仿真运行期间可随时调用，新参数在下一帧立即生效：
+
+            ctrl.set_target(target_pos=[0.0, 0.0, 2.0])
+            ctrl.set_target(kp=5.0, kd=4.0)
+
+        ``set_target`` 传入的参数优先级高于构造时的 ``controller_params``，
+        但不会修改原始 ``self.params``——子类的 ``controller()`` 签名无需改动。
+        """
+        with self._target_lock:
+            self._target.update(kwargs)
+
+    def get_target(self) -> dict:
+        """读取当前生效的目标参数（合并后的视图）。"""
+        with self._target_lock:
+            return dict(self.params, **self._target)
 
     # ---------- 用户接口 ----------
 
@@ -147,6 +175,11 @@ class MultirotorController(threading.Thread):
             if snapshot is None:            # 通道关闭（仿真退出）
                 break
             try:
+                with self._target_lock:
+                    frame_params = dict(self.params, **self._target)
+                u = np.asarray(
+                    self.controller(snapshot, **frame_params), dtype=float
+                ).reshape(-1)
                 u = np.asarray(
                     self.controller(snapshot, **self.params), dtype=float
                 ).reshape(-1)

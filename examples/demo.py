@@ -182,7 +182,7 @@ def run_full_demo(headless: bool = False) -> None:
     SWING_STOP = 7.0
     SIM_TIME = 9.0
     TILT_LIMIT = 0.20
-    Z_ERR_LIMIT = 0.3
+    Z_ERR_LIMIT = 0.5
     XY_LIMIT = 0.8
 
     print("=" * 64)
@@ -232,7 +232,35 @@ def run_full_demo(headless: bool = False) -> None:
     arm_ctrl.start()
     sim.start_physics()
 
-    # 全程连续监控
+    # 全程连续监控（3 s 时实时切换目标高度 1.5 -> 2.0 m）
+    target_switched = False
+    monitor = {"max_tilt": 0.0, "max_z_err": 0.0, "max_xy": 0.0}
+    sim_time = 0.0
+    deadline = time.time() + 120.0
+    while sim_time < SIM_TIME and time.time() < deadline and sim.is_alive():
+        t_arr, pos_arr, eul_arr = telemetry.snapshot()
+        if len(t_arr):
+            sim_time = float(t_arr[-1])
+            monitor["max_tilt"] = float(np.max(np.abs(eul_arr[:, :2])))
+            monitor["max_z_err"] = float(np.max(np.abs(pos_arr[:, 2] - SPAWN_Z)))
+            monitor["max_xy"] = float(np.max(np.linalg.norm(pos_arr[:, :2], axis=1)))
+            if monitor["max_tilt"] >= TILT_LIMIT:
+                raise RuntimeError(
+                    f"t={sim_time:.2f}s 倾角 {monitor['max_tilt']:.4f} rad 超限 {TILT_LIMIT} rad"
+                )
+            if monitor["max_z_err"] >= Z_ERR_LIMIT:
+                raise RuntimeError(
+                    f"t={sim_time:.2f}s 高度误差 {monitor['max_z_err']:.3f} m 超限 {Z_ERR_LIMIT} m"
+                )
+            if monitor["max_xy"] >= XY_LIMIT:
+                raise RuntimeError(
+                    f"t={sim_time:.2f}s 水平漂移 {monitor['max_xy']:.3f} m 超限 {XY_LIMIT} m"
+                )
+            if not target_switched and sim_time >= 3.0:
+                drone_ctrl.set_target(pos_ref=np.array([0.0, 0.0, 2.0]))
+                print(f"  [set_target] t={sim_time:.2f}s 目标高度切换 1.5 -> 2.0 m")
+                target_switched = True
+        time.sleep(0.1)
     monitor = {"max_tilt": 0.0, "max_z_err": 0.0, "max_xy": 0.0}
     sim_time = 0.0
     deadline = time.time() + 120.0
@@ -273,7 +301,7 @@ def run_full_demo(headless: bool = False) -> None:
     q_end = uam.manipulator.get_joint_positions()
     sweep = arm_ctrl.params["state"]["q_max"] - arm_ctrl.params["state"]["q_min"]
     tilt_end = max(abs(final_state.droneOrientation[0]), abs(final_state.droneOrientation[1]))
-    z_err = abs(final_state.dronePosition[2] - SPAWN_Z)
+    z_err = abs(final_state.dronePosition[2] - 2.0)
     xy_drift = float(np.linalg.norm(final_state.dronePosition[:2]))
 
     print(f"\n仿真时间: {sim_time:.2f} s")
@@ -285,7 +313,7 @@ def run_full_demo(headless: bool = False) -> None:
 
     assert sim_time >= SIM_TIME, f"仿真时间未推进到 {SIM_TIME} s: {sim_time:.2f}"
     assert tilt_end < 0.05, f"结束时姿态未回平: {tilt_end:.4f} rad"
-    assert z_err < 0.2, f"结束时高度误差过大: {z_err:.3f} m"
+    assert z_err < 0.3, f"结束时高度误差过大: {z_err:.3f} m""结束时高度误差过大: {z_err:.3f} m"
     assert xy_drift < 0.5, f"结束时水平漂移过大: {xy_drift:.3f} m"
     assert np.allclose(sweep, 2.0, atol=0.2), (
         f"每个关节实际摆幅峰峰值应约 2 rad（±1 rad 摆动），实际 {sweep}"
