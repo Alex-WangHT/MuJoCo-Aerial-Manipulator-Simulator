@@ -25,12 +25,12 @@ class TelemetryPublisher:
     参数:
         host: 目标主机（本机调试用 ``127.0.0.1``）
         port: 目标 UDP 端口
-        maxQueue: 待发送队列长度上限（满时丢最旧帧，保护主循环）
+        max_queue: 待发送队列长度上限（满时丢最旧帧，保护主循环）
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9100, maxQueue: int = 1000):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9100, max_queue: int = 1000):
         self._addr = (host, int(port))
-        self._queue: queue.Queue[bytes] = queue.Queue(maxsize=maxQueue)
+        self._queue: queue.Queue[bytes] = queue.Queue(maxsize=max_queue)
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(

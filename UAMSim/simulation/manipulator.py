@@ -21,8 +21,7 @@ try:
 except Exception:  # pragma: no cover
     mujoco = None
 
-from .. import _MODELS_DIR
-from ..utils.PerceptionBus import SensorSnapshot
+from ..utils.perception_bus import SensorSnapshot
 
 
 class Manipulator:
@@ -39,12 +38,12 @@ class Manipulator:
 
     EE_SITE_NAME = "ee_site"
 
-    def __init__(self, manipulatorPath: str | None = None):
+    def __init__(self, manipulator_path: str):
         """读取机械臂 MJCF，自省关节 / actuator / sensor 信息（不编译）。"""
         if mujoco is None:
             raise ImportError("Manipulator 需要 mujoco 包，请先 pip install mujoco")
 
-        path = pathlib.Path(manipulatorPath) if manipulatorPath else _MODELS_DIR / "Manipulator.xml"
+        path = pathlib.Path(manipulator_path)
         self.spec = mujoco.MjSpec.from_file(str(path))
 
         # ---- 关节自省（非 free，spec 文档序即运动树序） ----

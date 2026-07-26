@@ -1,7 +1,8 @@
 """Environment（MuJoCo 场景环境）组合与交互测试。
 
-直接运行：
-    .venv/Scripts/python tests/test_environment.py
+安装包后运行::
+
+    python tests/test_environment.py
 
 验证内容：
 1. Environment 加载场景、attach_robot 组合 Multirotor + Manipulator 并统一编译；
@@ -14,19 +15,26 @@
 from __future__ import annotations
 
 import pathlib
-import sys
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from src import (
-    ControllerChannel,
-    Environment,
-    Manipulator,
-    Multirotor,
-    MultirotorController,
-)
+import UAMSim as ua
+
+
+_BASE = pathlib.Path(__file__).resolve().parent.parent
+_SCENE_XML = str(_BASE / "examples" / "models" / "environment.xml")
+_MULTIROTOR_XML = str(_BASE / "examples" / "models" / "multirotor.xml")
+_MANIPULATOR_XML = str(_BASE / "examples" / "models" / "Manipulator.xml")
+
+
+class HoverController(ua.MultirotorController):
+    """最小 PD 高度保持控制器（测试用）。"""
+
+    def controller(self, feedback, targetPosition, hoverThrust, kp, kd):
+        err = targetPosition - feedback.dronePosition
+        vel = feedback.droneVelocity
+        thrust = hoverThrust + kp * err[2] - kd * vel[2]
+        return np.full(self._multirotor.n_rotors, thrust)
 
 
 def main() -> None:
@@ -36,8 +44,8 @@ def main() -> None:
 
     # ---------- 1. 组合编译与前缀检查 ----------
     print("\n[1] 场景组合编译")
-    env = Environment()
-    uam = env.attach_robot(Multirotor(), Manipulator())
+    env = ua.Environment(_SCENE_XML)
+    uam = env.attach_robot(ua.Multirotor(_MULTIROTOR_XML), ua.Manipulator(_MANIPULATOR_XML))
 
     assert uam.model is env.model, "机器人应共享场景模型"
     rotor_names = list(uam.multirotor.rotors)
@@ -72,8 +80,13 @@ def main() -> None:
 
     # ---------- 4. 场景中闭环悬停 0.5 s（控制器独立线程） ----------
     print("\n[4] 场景中闭环悬停（0.5 s）")
-    drone_channel = ControllerChannel()
-    drone_ctrl = MultirotorController(drone_channel, uam.multirotor, targetPosition=[0.0, 0.0, 1.5])
+    drone_channel = ua.ControllerChannel()
+    drone_ctrl = HoverController(
+        uam.multirotor, drone_channel,
+        targetPosition=[0.0, 0.0, 1.5],
+        hoverThrust=uam.hover_thrust(),
+        kp=4.0, kd=3.0,
+    )
     drone_ctrl.start()
     uam.manipulator.set_actuator([0.0, 0.0, 0.0])
     try:

@@ -8,8 +8,8 @@
 
 from __future__ import annotations
 
-from .Manipulator import Manipulator
-from .Multirotor import Multirotor
+from .manipulator import Manipulator
+from .multirotor import Multirotor
 
 
 class Robot:

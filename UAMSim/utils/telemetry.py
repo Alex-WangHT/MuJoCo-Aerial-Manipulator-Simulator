@@ -14,8 +14,8 @@ class TelemetrySample:
 
 
 class TelemetryBuffer:
-    def __init__(self, maxSamples: int = 5000):
-        self._maxSamples = maxSamples
+    def __init__(self, max_samples: int = 5000):
+        self._max_samples = max_samples
         self._samples: list[TelemetrySample] = []
         self._lock = threading.Lock()
 
@@ -27,8 +27,8 @@ class TelemetryBuffer:
         )
         with self._lock:
             self._samples.append(sample)
-            if len(self._samples) > self._maxSamples:
-                del self._samples[: len(self._samples) - self._maxSamples]
+            if len(self._samples) > self._max_samples:
+                del self._samples[: len(self._samples) - self._max_samples]
 
     def snapshot(self):
         with self._lock:

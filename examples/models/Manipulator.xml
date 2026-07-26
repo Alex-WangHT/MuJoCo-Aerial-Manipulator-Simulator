@@ -1,0 +1,84 @@
+<mujoco model="manipulator_3dof">
+  <!--
+    三自由度机械臂（Manipulator）：基座回转 + 肩俯仰 + 肘俯仰。
+
+    本文件是"子模型"：由 AerialManipulator 通过 mjSpec.attach 挂到
+    multirotor.xml 的 manipulator_mount site 上，attach 后所有名称带前缀（默认 arm/）。
+
+    约定（供 Manipulator.py 按名称/前缀自省）：
+    - 关节:       joint1（基座回转）/ joint2（肩俯仰）/ joint3（肘俯仰）
+    - 舵机:       与关节同名（<position joint="jointN">）
+    - 末端 site:   ee_site
+    - 传感器:     jointposN / jointvelN / ee_pos / ee_quat
+
+    注意：作为子模型不要声明 <option>/<size> 或地板/灯光——编译时以父模型为准。
+  -->
+
+  <compiler angle="radian"/>
+
+  <default>
+    <default class="arm3dof">
+      <joint frictionloss="0.1" armature="0.1"/>
+      <position kp="50" dampratio="1" forcerange="-3.5 3.5"/>
+      <default class="visual">
+        <geom contype="0" conaffinity="0" density="0" group="2" rgba="0.85 0.85 0.9 1"/>
+      </default>
+      <default class="collision">
+        <geom group="3" rgba="0.7 0.7 0.75 0.3" contype="0" conaffinity="0"/>
+      </default>
+    </default>
+  </default>
+
+  <worldbody>
+    <!-- 基座：用 capsule 替代原 STL mesh，保持相近惯性参数 -->
+    <body name="Base" euler="1.8596 0 0" childclass="arm3dof">
+      <inertial pos="0 0 0.025" mass="0.1" diaginertia="8e-5 8e-5 8e-5"/>
+      <geom type="capsule" size="0.025" fromto="0 0 0 0 0 0.05" class="visual"/>
+      <geom name="base_geom" type="capsule" size="0.025" fromto="0 0 0 0 0 0.05" class="collision"/>
+      <body name="Rotation_Pitch" pos="0 -0.0452 0.0165" quat="0.707105 0.707108 0 0">
+        <inertial pos="-9e-05 0.059 0.031" quat="0.363978 0.441169 -0.623108 0.533504"
+          mass="0.119" diaginertia="6e-05 6e-05 3e-05"/>
+        <joint name="joint1" axis="0 1 0" range="-1.92 1.92"/>
+        <geom type="capsule" size="0.022" fromto="0 0 0 0 0.10 0.03" class="visual"/>
+        <geom name="rotation_geom" type="capsule" size="0.022" fromto="0 0 0 0 0.10 0.03" class="collision"/>
+        <body name="Upper_Arm" pos="0 0.1025 0.0306" euler="1.57079 0 0">
+          <inertial pos="0 0.070 0.003" quat="0.50104 0.498994 -0.493562 0.50632"
+            mass="0.162" diaginertia="0.00021 0.00017 7e-05"/>
+          <joint name="joint2" axis="1 0 0" range="-3.32 0.174"/>
+          <geom type="capsule" size="0.020" fromto="0 0 0 0 0.11 0" class="visual"/>
+          <geom name="upper_geom" type="capsule" size="0.020" fromto="0 0 0 0 0.11 0" class="collision"/>
+          <body name="Lower_Arm" pos="0 0.11257 0.028" euler="-1.57079 0 0">
+            <inertial pos="-0.003 0.001 0.077" quat="0.702 0.079 0.065 0.705"
+              mass="0.148" diaginertia="0.00014 0.00011 5e-05"/>
+            <joint name="joint3" axis="1 0 0" range="-0.174 3.14"/>
+            <geom type="capsule" size="0.018" fromto="0 0 0 0 0 0.13" class="visual"/>
+            <geom name="lower_geom" type="capsule" size="0.018" fromto="0 0 0 0 0 0.13" class="collision"/>
+            <!-- 末端执行器 -->
+            <site name="ee_site" pos="0 0.0052 0.1349" euler="-1.57079 0 0" size="0.008" rgba="1 0 0 1"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position class="arm3dof" name="joint1" joint="joint1" inheritrange="1"/>
+    <position class="arm3dof" name="joint2" joint="joint2" inheritrange="1"/>
+    <position class="arm3dof" name="joint3" joint="joint3" inheritrange="1"/>
+  </actuator>
+
+  <sensor>
+    <jointpos name="jointpos1" joint="joint1"/>
+    <jointpos name="jointpos2" joint="joint2"/>
+    <jointpos name="jointpos3" joint="joint3"/>
+    <jointvel name="jointvel1" joint="joint1"/>
+    <jointvel name="jointvel2" joint="joint2"/>
+    <jointvel name="jointvel3" joint="joint3"/>
+    <framepos name="ee_pos" objtype="site" objname="ee_site"/>
+    <framequat name="ee_quat" objtype="site" objname="ee_site"/>
+  </sensor>
+
+  <contact>
+    <exclude body1="Base" body2="Rotation_Pitch"/>
+  </contact>
+</mujoco>

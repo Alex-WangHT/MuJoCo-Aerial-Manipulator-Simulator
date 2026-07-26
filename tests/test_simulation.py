@@ -1,7 +1,8 @@
 """MujocoSimulation 三线程模型的无头仿真测试。
 
-直接运行：
-    .venv/Scripts/python tests/test_simulation.py
+安装包后运行::
+
+    python tests/test_simulation.py
 
 验证内容：
 1. 闭环悬停无头运行 1 s：控制器独立线程经 sim.drone_channel 接线，
@@ -14,37 +15,48 @@
 from __future__ import annotations
 
 import pathlib
-import sys
 import threading
 import time
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-
 import numpy as np
 
-from src import (
-    Environment,
-    Manipulator,
-    MujocoSimulation,
-    Multirotor,
-    MultirotorController,
-    TelemetryBuffer,
-)
+import UAMSim as ua
 
 
-def run_sim(seconds: float, droneTarget=None, **kwargs):
-    """组装场景+机器人组件并启动仿真线程；给 droneTarget 时接线一个位置闭环控制器线程。"""
+_BASE = pathlib.Path(__file__).resolve().parent.parent
+_SCENE_XML = str(_BASE / "examples" / "models" / "environment.xml")
+_MULTIROTOR_XML = str(_BASE / "examples" / "models" / "multirotor.xml")
+
+
+class HoverController(ua.MultirotorController):
+    """最小 PD 高度保持控制器（测试用）。"""
+
+    def controller(self, feedback, targetPosition, hoverThrust, kp, kd):
+        err = targetPosition - feedback.dronePosition
+        vel = feedback.droneVelocity
+        thrust = hoverThrust + kp * err[2] - kd * vel[2]
+        return np.full(self._multirotor.n_rotors, thrust)
+
+
+def run_sim(seconds: float, drone_target=None, **kwargs):
+    """组装场景+机器人组件并启动仿真线程；给 drone_target 时接线一个位置闭环控制器线程。"""
     shutdown = threading.Event()
-    telemetry = TelemetryBuffer()
-    env = Environment()
-    sim = MujocoSimulation(shutdown, env, Multirotor(), Manipulator(),
-                           telemetryBuffer=telemetry, useViewer=False, **kwargs)
+    telemetry = ua.TelemetryBuffer()
+    env = ua.Environment(_SCENE_XML)
+    sim = ua.MujocoSimulation(
+        shutdown, env, ua.Multirotor(_MULTIROTOR_XML), None,
+        telemetry_buffer=telemetry, use_viewer=False, **kwargs
+    )
     sim.start()
     assert sim.wait_ready(timeout=10.0), "场景编译超时"
     drone_ctrl = None
-    if droneTarget is not None:
-        drone_ctrl = MultirotorController(sim.drone_channel, sim.uam.multirotor,
-                                          targetPosition=droneTarget)
+    if drone_target is not None:
+        drone_ctrl = HoverController(
+            sim.uam.multirotor, sim.drone_channel,
+            targetPosition=drone_target,
+            hoverThrust=sim.uam.hover_thrust(),
+            kp=4.0, kd=3.0,
+        )
         drone_ctrl.start()
     sim.start_physics()
     time.sleep(seconds)
@@ -63,7 +75,7 @@ def main() -> None:
 
     # ---------- 1. 闭环悬停 1 s ----------
     print("\n[1] 位置闭环悬停（目标 z=1.5 m），无头运行 1 s")
-    sim, telemetry = run_sim(1.0, droneTarget=[0.0, 0.0, 1.5])
+    sim, telemetry = run_sim(1.0, drone_target=[0.0, 0.0, 1.5])
     assert not sim.is_alive(), "stop 后线程应退出"
     assert sim.env is not None and sim.uam is not None, "场景与机器人应已构建"
     time_arr, positions, eulers = telemetry.snapshot()
@@ -78,14 +90,14 @@ def main() -> None:
 
     # ---------- 2. 位置闭环上升到 2.0 m ----------
     print("\n[2] 位置闭环上升（目标 z=2.0 m），1.5 s")
-    _, telemetry_up = run_sim(1.5, droneTarget=[0.0, 0.0, 2.0])
+    _, telemetry_up = run_sim(1.5, drone_target=[0.0, 0.0, 2.0])
     _, pos_up, _ = telemetry_up.snapshot()
     print(f"    末端高度: {pos_up[-1][2]:.4f} m（初始 1.5 m）")
     assert pos_up[-1][2] > 1.6, f"闭环爬升应到达 2.0 m 附近，实际 {pos_up[-1][2]:.3f}"
 
     # ---------- 3. 固定推力 0（无控制器线程）-> 下落 ----------
     print("\n[3] 固定推力 0，0.8 s")
-    _, telemetry_down = run_sim(0.8, fixedRotorThrust=0.0)
+    _, telemetry_down = run_sim(0.8, fixed_rotor_thrust=0.0)
     _, pos_down, _ = telemetry_down.snapshot()
     print(f"    末端高度: {pos_down[-1][2]:.4f} m（初始 1.5 m）")
     assert pos_down[-1][2] < 1.0, f"零推力应下落，实际 {pos_down[-1][2]:.3f}"

@@ -17,21 +17,19 @@ try:
 except Exception:  # pragma: no cover
     mujoco = None
 
-from .. import _MODELS_DIR
-from .Manipulator import Manipulator
-from .Multirotor import Multirotor
-from .Robot import Robot
+from .manipulator import Manipulator
+from .multirotor import Multirotor
+from .robot import Robot
 
 
 class Environment:
     """MuJoCo 场景环境：地板、灯光、障碍物与机器人的组合器。
 
-    作为唯一组合器加载 ``models/environment.xml``，机器人组件
-    （``Multirotor`` + 可选 ``Manipulator``，均已各自读取 MJCF、尚未绑定）
-    通过 ``attach_robot()`` 完成组合：机械臂 spec 固连到多旋翼的
-    ``manipulator_mount`` site（名称加 ``armPrefix``），整机再挂到场景的
-    ``uam_spawn`` site 上（名称加 ``prefix``，默认 ``uam/``），随后统一编译。
-    编译后组件视图自动绑定到场景共享模型，返回 ``Robot`` 句柄。
+    加载外部 MJCF 文件，机器人组件（``Multirotor`` + 可选 ``Manipulator``，
+    均已各自读取 MJCF、尚未绑定）通过 ``attach_robot()`` 完成组合：机械臂
+    spec 固连到多旋翼的 ``manipulator_mount`` site（名称加 ``armPrefix``），
+    整机再挂到场景的 ``uam_spawn`` site 上（名称加 ``prefix``，默认 ``uam/``），
+    随后统一编译。编译后组件视图自动绑定到场景共享模型，返回 ``Robot`` 句柄。
 
     交互查询：
     - ``obstacles`` / ``get_obstacle_positions()``：障碍物名称与位置
@@ -41,11 +39,11 @@ class Environment:
     SPAWN_SITE_NAME = "uam_spawn"
     OBSTACLE_PREFIX = "obstacle_"
 
-    def __init__(self, environmentPath: str | None = None):
+    def __init__(self, environment_path: str):
         if mujoco is None:
             raise ImportError("Environment 需要 mujoco 包，请先 pip install mujoco")
 
-        env_path = pathlib.Path(environmentPath) if environmentPath else _MODELS_DIR / "environment.xml"
+        env_path = pathlib.Path(environment_path)
         self._spec = mujoco.MjSpec.from_file(str(env_path))
 
         self._attachments: list[tuple[Multirotor, Manipulator | None, str, str]] = []
@@ -63,13 +61,13 @@ class Environment:
         manipulator: Manipulator | None = None,
         site: str = SPAWN_SITE_NAME,
         prefix: str = "uam/",
-        mountSite: str = Multirotor.MOUNT_SITE_NAME,
-        armPrefix: str = "arm/",
+        mount_site: str = Multirotor.MOUNT_SITE_NAME,
+        arm_prefix: str = "arm/",
     ) -> Robot:
         """组合机器人组件并挂到场景的 ``site`` 上，重新统一编译。
 
         两级 attach：有机械臂时先把 ``manipulator`` 的 spec 固连到多旋翼的
-        ``mountSite``（子模型名称加 ``armPrefix``），再把整机 spec 挂到场景
+        ``mount_site``（子模型名称加 ``arm_prefix``），再把整机 spec 挂到场景
         ``site``（全部名称加 ``prefix``，如 ``uam/drone``、``uam/arm/joint1``）。
 
         组件须尚未绑定（一经 attach 编译即绑定到场景，不可重复挂载）。
@@ -92,11 +90,11 @@ class Environment:
 
         # ---- 第一级：机械臂 spec 固连到平台挂载点，子模型名称加 arm 前缀 ----
         if manipulator is not None:
-            multirotor.spec.attach(manipulator.spec, site=mountSite, prefix=armPrefix)
+            multirotor.spec.attach(manipulator.spec, site=mount_site, prefix=arm_prefix)
 
         # ---- 第二级：整机 spec 挂到场景出生点，全部名称加机器人前缀 ----
         self._spec.attach(multirotor.spec, site=site, prefix=prefix)
-        self._attachments.append((multirotor, manipulator, prefix, armPrefix))
+        self._attachments.append((multirotor, manipulator, prefix, arm_prefix))
         self.compile()
         return self.robots[-1]
 
@@ -106,10 +104,10 @@ class Environment:
         self.data = mujoco.MjData(self.model)
 
         self.robots = []
-        for multirotor, manipulator, prefix, armPrefix in self._attachments:
+        for multirotor, manipulator, prefix, arm_prefix in self._attachments:
             multirotor.bind(self.model, self.data, prefix)
             if manipulator is not None:
-                manipulator.bind(self.model, self.data, prefix + armPrefix)
+                manipulator.bind(self.model, self.data, prefix + arm_prefix)
             self.robots.append(Robot(multirotor, manipulator, prefix))
 
         self._refresh_obstacles()
@@ -167,4 +165,3 @@ class Environment:
             for name1, name2, pos in self.get_contacts()
             if name1.startswith(prefix) or name2.startswith(prefix)
         ]
-

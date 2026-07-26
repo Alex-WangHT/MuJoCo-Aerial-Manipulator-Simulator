@@ -1,6 +1,6 @@
 """机械臂控制器线程基类。
 
-三线程模型（见 ``src/utils/FrameSync.py``）中的控制环一端：仿真线程每帧把
+三线程模型（见 ``UAMSim.utils.frame_sync``）中的控制环一端：仿真线程每帧把
 ``SensorSnapshot`` 帧同步快照发布到 ``arm_channel`` 邮箱并阻塞等回执，
 本线程 ``wait_snapshot`` 收到后调用用户重写的 ``controller()`` 计算关节
 目标角，写入舵机执行器缓冲并 ``mark_done``，仿真线程随后在帧边界统一落盘
@@ -14,7 +14,7 @@ mjData。本线程只读写通道对象，**绝不触碰 mjData**。
 
     sim.start(); sim.wait_ready()          # 编译完成、通道已暴露、物理仍停放
     ctrl = HoldController(sim.uam.manipulator, sim.arm_channel,
-                          shutdownEvent,
+                          shutdown_event,
                           q_target=sim.uam.manipulator.get_joint_positions())
     ctrl.start()
     sim.start_physics()
@@ -37,10 +37,10 @@ import threading
 
 import numpy as np
 
-from ..simulation.Manipulator import Manipulator
-from ..utils.Actuators import ServoActuator
-from ..utils.FrameSync import ControllerChannel
-from ..utils.PerceptionBus import SensorSnapshot
+from ..simulation.manipulator import Manipulator
+from ..utils.actuators import ServoActuator
+from ..utils.frame_sync import ControllerChannel
+from ..utils.perception_bus import SensorSnapshot
 
 
 class ManipulatorController(threading.Thread):
@@ -50,7 +50,7 @@ class ManipulatorController(threading.Thread):
         manipulator: 已绑定编译产物的 ``Manipulator`` 组件视图
             （``Environment.attach_robot()`` / ``sim.wait_ready()`` 之后）
         channel: 仿真线程暴露的 ``sim.arm_channel``
-        shutdownEvent: 外部共享退出事件（缺省内部自建；正常退出路径是仿真
+        shutdown_event: 外部共享退出事件（缺省内部自建；正常退出路径是仿真
             结束时通道 ``close()``，本事件只是额外保险）
         **controller_params: 自定义输入（参考、增益等），逐帧透传给
             ``controller(feedback, **params)``
@@ -60,7 +60,7 @@ class ManipulatorController(threading.Thread):
         self,
         manipulator: Manipulator,
         channel: ControllerChannel,
-        shutdownEvent: threading.Event | None = None,
+        shutdown_event: threading.Event | None = None,
         **controller_params,
     ):
         super().__init__(daemon=True, name="ManipulatorController")
@@ -81,7 +81,7 @@ class ManipulatorController(threading.Thread):
             )
         self._manipulator = manipulator
         self._channel = channel
-        self._shutdownEvent = shutdownEvent if shutdownEvent is not None else threading.Event()
+        self._shutdown_event = shutdown_event if shutdown_event is not None else threading.Event()
         self.params = dict(controller_params)
 
         # ---- 自动注册控制输出：每个关节一个舵机缓冲，注册到通道 ----
@@ -142,7 +142,7 @@ class ManipulatorController(threading.Thread):
         n_joints = self._manipulator.n_joints
         last_frame = 0
         last_error = None
-        while not self._shutdownEvent.is_set():
+        while not self._shutdown_event.is_set():
             snapshot, frame = mailbox.wait_snapshot(last_frame)
             if snapshot is None:            # 通道关闭（仿真退出）
                 break

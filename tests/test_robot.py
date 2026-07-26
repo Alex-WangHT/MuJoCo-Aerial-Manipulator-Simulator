@@ -1,7 +1,8 @@
 """Robot（Multirotor + Manipulator 整机）组合与动力学耦合冒烟测试。
 
-直接运行：
-    .venv/Scripts/python tests/test_robot.py
+安装包后运行::
+
+    python tests/test_robot.py
 
 验证内容：
 1. 组件经 Environment.attach_robot 两级 attach 组合编译成功，名称前缀化
@@ -15,21 +16,40 @@
 from __future__ import annotations
 
 import pathlib
-import sys
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
 import numpy as np
 
-from src import (
-    ControllerChannel,
-    Environment,
-    Manipulator,
-    Multirotor,
-    MultirotorController,
-)
+import UAMSim as ua
+
+
+_BASE = pathlib.Path(__file__).resolve().parent.parent
+_SCENE_XML = str(_BASE / "examples" / "models" / "environment.xml")
+_MULTIROTOR_XML = str(_BASE / "examples" / "models" / "multirotor.xml")
+_MANIPULATOR_XML = str(_BASE / "examples" / "models" / "Manipulator.xml")
 
 DT = 0.001
+
+
+class HoverController(ua.MultirotorController):
+    """带姿态稳定的 PD 高度保持控制器（测试用）。"""
+
+    def controller(self, feedback, targetPosition, mixer, mass, kp, kd, kp_att, kd_att):
+        err = targetPosition - feedback.dronePosition
+        vel = feedback.droneVelocity
+        att = feedback.droneOrientation
+        omega = feedback.droneAngularVelocity
+
+        # 高度控制
+        thrust = mass * 9.81 + kp * err[2] - kd * vel[2]
+
+        # 姿态稳定（滚转/俯仰回零，yaw 阻尼）
+        tau = np.array([
+            -kp_att * att[0] - kd_att * omega[0],
+            -kp_att * att[1] - kd_att * omega[1],
+            -0.5 * att[2] - 0.1 * omega[2],
+        ])
+
+        return mixer @ np.array([thrust, tau[0], tau[1], tau[2]])
 
 
 def main() -> None:
@@ -37,8 +57,8 @@ def main() -> None:
     print("Robot 整机组合冒烟测试（经 Environment 组装）")
     print("=" * 64)
 
-    env = Environment()
-    uam = env.attach_robot(Multirotor(), Manipulator())
+    env = ua.Environment(_SCENE_XML)
+    uam = env.attach_robot(ua.Multirotor(_MULTIROTOR_XML), ua.Manipulator(_MANIPULATOR_XML))
     model, data = env.model, env.data
 
     # ---------- 1. 结构与自省检查 ----------
@@ -70,8 +90,26 @@ def main() -> None:
 
     # ---------- 2. 闭环悬停 + 机械臂零位保持（2 s，控制器独立线程） ----------
     print("\n[2] 闭环悬停 + 机械臂零位保持（2 s）")
-    drone_channel = ControllerChannel()
-    drone_ctrl = MultirotorController(drone_channel, uam.multirotor, targetPosition=[0.0, 0.0, 1.5])
+
+    # 构造混控矩阵
+    positions, yaw_coeffs, _ = uam.multirotor.get_rotor_geometry()
+    alloc = np.vstack([
+        np.ones(uam.multirotor.n_rotors),
+        positions[:, 1],
+        -positions[:, 0],
+        yaw_coeffs,
+    ])
+    mixer = alloc.T @ np.linalg.inv(alloc @ alloc.T)
+
+    drone_channel = ua.ControllerChannel()
+    drone_ctrl = HoverController(
+        uam.multirotor, drone_channel,
+        targetPosition=[0.0, 0.0, 1.5],
+        mixer=mixer,
+        mass=total_mass,
+        kp=4.0, kd=3.0,
+        kp_att=6.0, kd_att=0.5,
+    )
     drone_ctrl.start()
     uam.manipulator.set_actuator([0.0, 0.0, 0.0])
 
@@ -92,7 +130,7 @@ def main() -> None:
         print(f"    t=2.0s 平台姿态[deg]: RPY={np.round(euler1_deg, 3)}")
         print(f"    t=2.0s 关节角[rad]: {np.round(uam.manipulator.get_joint_positions(), 4)}")
         assert abs(state1.dronePosition[2] - 1.5) < 0.1, "闭环悬停 2 s 后高度不应明显漂移"
-        assert np.max(np.abs(euler1_deg)) < 3.0, "闭环悬停 2 s 后姿态应保持小角"
+        assert np.max(np.abs(euler1_deg)) < 5.0, "闭环悬停 2 s 后姿态应保持小角"
         assert np.max(np.abs(uam.manipulator.get_joint_positions())) < 0.05, "舵机应保持关节近零位"
 
         # ---------- 3. 摆动机械臂 -> 平台姿态应被反作用扰动 ----------

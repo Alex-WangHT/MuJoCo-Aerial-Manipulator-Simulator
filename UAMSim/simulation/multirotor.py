@@ -22,10 +22,8 @@ try:
 except Exception:  # pragma: no cover - 允许未安装 mujoco 时导入本模块
     mujoco = None
 
-from .. import _MODELS_DIR
-from ..utils.PerceptionBus import SensorSnapshot
-
-from .. import quaternionToEuler
+from ..utils.perception_bus import SensorSnapshot
+from .. import quaternion_to_euler
 
 
 class Multirotor:
@@ -47,12 +45,12 @@ class Multirotor:
 
     _ROTOR_PATTERN = re.compile(r"^rotor(\d+)$")
 
-    def __init__(self, multirotorPath: str | None = None):
+    def __init__(self, multirotor_path: str):
         """读取多旋翼 MJCF，自省 actuator / sensor 等约定信息（不编译）。"""
         if mujoco is None:
             raise ImportError("Multirotor 需要 mujoco 包，请先 pip install mujoco")
 
-        path = pathlib.Path(multirotorPath) if multirotorPath else _MODELS_DIR / "multirotor.xml"
+        path = pathlib.Path(multirotor_path)
         self.spec = mujoco.MjSpec.from_file(str(path))
 
         # ---- actuator 自省：rotorN 命名约定，按编号排序 ----
@@ -199,7 +197,7 @@ class Multirotor:
             timestep=float(self._model.opt.timestep),
             dronePosition=qpos[:3].copy(),
             droneVelocity=qvel[:3].copy(),
-            droneOrientation=quaternionToEuler(qpos[3:7]),
+            droneOrientation=quaternion_to_euler(qpos[3:7]),
             droneAngularVelocity=qvel[3:6].copy(),
         )
 

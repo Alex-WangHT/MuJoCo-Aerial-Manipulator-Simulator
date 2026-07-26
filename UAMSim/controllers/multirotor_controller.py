@@ -1,6 +1,6 @@
 """多旋翼控制器线程基类。
 
-三线程模型（见 ``src/utils/FrameSync.py``）中的控制环一端：仿真线程每帧把
+三线程模型（见 ``UAMSim.utils.frame_sync``）中的控制环一端：仿真线程每帧把
 ``SensorSnapshot`` 帧同步快照发布到 ``drone_channel`` 邮箱并阻塞等回执，
 本线程 ``wait_snapshot`` 收到后调用用户重写的 ``controller()`` 计算推力，
 写入旋翼执行器缓冲并 ``mark_done``，仿真线程随后在帧边界统一落盘 mjData。
@@ -15,7 +15,7 @@
 
     sim.start(); sim.wait_ready()          # 编译完成、通道已暴露、物理仍停放
     ctrl = HoverController(sim.uam.multirotor, sim.drone_channel,
-                           shutdownEvent, target_z=1.0, hover=sim.uam.hover_thrust())
+                           shutdown_event, target_z=1.0, hover=sim.uam.hover_thrust())
     ctrl.start()
     sim.start_physics()
 
@@ -37,10 +37,10 @@ import threading
 
 import numpy as np
 
-from ..simulation.Multirotor import Multirotor
-from ..utils.Actuators import RotorActuator
-from ..utils.FrameSync import ControllerChannel
-from ..utils.PerceptionBus import SensorSnapshot
+from ..simulation.multirotor import Multirotor
+from ..utils.actuators import RotorActuator
+from ..utils.frame_sync import ControllerChannel
+from ..utils.perception_bus import SensorSnapshot
 
 
 class MultirotorController(threading.Thread):
@@ -50,7 +50,7 @@ class MultirotorController(threading.Thread):
         multirotor: 已绑定编译产物的 ``Multirotor`` 组件视图
             （``Environment.attach_robot()`` / ``sim.wait_ready()`` 之后）
         channel: 仿真线程暴露的 ``sim.drone_channel``
-        shutdownEvent: 外部共享退出事件（缺省内部自建；正常退出路径是仿真
+        shutdown_event: 外部共享退出事件（缺省内部自建；正常退出路径是仿真
             结束时通道 ``close()``，本事件只是额外保险）
         **controller_params: 自定义输入（参考、增益等），逐帧透传给
             ``controller(feedback, **params)``
@@ -60,7 +60,7 @@ class MultirotorController(threading.Thread):
         self,
         multirotor: Multirotor,
         channel: ControllerChannel,
-        shutdownEvent: threading.Event | None = None,
+        shutdown_event: threading.Event | None = None,
         **controller_params,
     ):
         super().__init__(daemon=True, name="MultirotorController")
@@ -81,7 +81,7 @@ class MultirotorController(threading.Thread):
             )
         self._multirotor = multirotor
         self._channel = channel
-        self._shutdownEvent = shutdownEvent if shutdownEvent is not None else threading.Event()
+        self._shutdown_event = shutdown_event if shutdown_event is not None else threading.Event()
         self.params = dict(controller_params)
 
         # ---- 自动注册控制输出：每个旋翼一个执行器缓冲，注册到通道 ----
@@ -142,7 +142,7 @@ class MultirotorController(threading.Thread):
         n_rotors = self._multirotor.n_rotors
         last_frame = 0
         last_error = None
-        while not self._shutdownEvent.is_set():
+        while not self._shutdown_event.is_set():
             snapshot, frame = mailbox.wait_snapshot(last_frame)
             if snapshot is None:            # 通道关闭（仿真退出）
                 break

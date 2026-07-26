@@ -83,12 +83,12 @@ class PerceptionPublisher:
     参数:
         host: 目标主机（本机调试用 ``127.0.0.1``）
         port: 目标 UDP 端口
-        maxQueue: 待发送分片队列上限（满时丢最旧片，保护主循环）
+        max_queue: 待发送分片队列上限（满时丢最旧片，保护主循环）
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 9200, maxQueue: int = 512):
+    def __init__(self, host: str = "127.0.0.1", port: int = 9200, max_queue: int = 512):
         self._addr = (host, int(port))
-        self._queue: queue.Queue[bytes] = queue.Queue(maxsize=maxQueue)
+        self._queue: queue.Queue[bytes] = queue.Queue(maxsize=max_queue)
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(
@@ -172,12 +172,12 @@ class PerceptionReceiver:
     """
 
     def __init__(self, host: str = "0.0.0.0", port: int = 9200,
-                 maxFrames: int = 8, frameTimeout: float = 0.5):
+                 max_frames: int = 8, frame_timeout: float = 0.5):
         self._addr = (host, int(port))
-        self._maxFrames = maxFrames
-        self._frameTimeout = frameTimeout
+        self._max_frames = max_frames
+        self._frame_timeout = frame_timeout
         self._socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self._frames: queue.Queue[tuple[dict, bytes]] = queue.Queue(maxsize=maxFrames)
+        self._frames: queue.Queue[tuple[dict, bytes]] = queue.Queue(maxsize=max_frames)
         self._stop_event = threading.Event()
         self._thread = threading.Thread(
             target=self._worker, daemon=True, name="PerceptionReceiver"
@@ -235,7 +235,7 @@ class PerceptionReceiver:
 
             ctx = partials.setdefault(frame_id, {
                 "meta": meta, "cnt": cnt, "t": timestamp,
-                "chunks": {}, "deadline": time.monotonic() + self._frameTimeout,
+                "chunks": {}, "deadline": time.monotonic() + self._frame_timeout,
             })
             ctx["chunks"][idx] = datagram[meta_end:]
             if len(ctx["chunks"]) == ctx["cnt"]:
