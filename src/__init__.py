@@ -15,14 +15,17 @@
 - ``MujocoSimulation``  仿真线程：输入 Environment + 机器人组件实例
                         （合并打包，仅对 Environment 编译），唯一访问 mjData；
                         编译后暴露 drone_channel / arm_channel 与 sim.uam 句柄
-- ``MultirotorController``   多旋翼控制器线程基类；重写 control()
-- ``ManipulatorController``  机械臂控制器线程基类；重写 compute_joint_targets()
+- ``MultirotorController``   多旋翼控制器线程基类；重写 controller()
+- ``ManipulatorController``  机械臂控制器线程基类；重写 controller()
 - ``FrameSync``         FrameMailbox 帧同步邮箱 + ControllerChannel 通道
 - ``Actuators``         RotorActuator / ServoActuator 执行器缓冲
                         （控制器写缓冲，仿真线程帧边界统一落盘 mjData）
 
 数据载体:
-- ``Messages``   SensorData / ManipulatorSensorData / ControlInput
+- ``PerceptionBus``      传感数据总线：SensorSnapshot 通用快照（帧同步邮箱
+                         载荷，进程内 1 kHz 控制环）+ 跨进程感知通道
+                         （PerceptionSource 相机/雷达预留接口 + UDP 分片
+                         发布/接收，异步降频，不占帧同步通道）
 - ``Telemetry``  TelemetryBuffer（线程安全遥测环形缓冲，GCS 读取端）
 - ``TelemetryPublisher``  跨进程遥测通道（UDP+JSON 独立线程，非阻塞）
 
@@ -60,9 +63,14 @@ def quaternionToEuler(q) -> np.ndarray:
     return np.array([roll, pitch, yaw], dtype=float)
 
 
-from .utils.Messages import ControlInput, ManipulatorSensorData, SensorData  # noqa: E402
 from .utils.Telemetry import TelemetryBuffer  # noqa: E402
 from .utils.TelemetryPublisher import TelemetryPublisher  # noqa: E402
+from .utils.PerceptionBus import (  # noqa: E402
+    PerceptionPublisher,
+    PerceptionReceiver,
+    PerceptionSource,
+    SensorSnapshot,
+)
 from .utils.FrameSync import ControllerChannel, FrameMailbox  # noqa: E402
 from .utils.Actuators import RotorActuator, ServoActuator  # noqa: E402
 from .simulation.Multirotor import Multirotor  # noqa: E402
@@ -85,10 +93,11 @@ __all__ = [
     "ControllerChannel",
     "RotorActuator",
     "ServoActuator",
-    "SensorData",
-    "ManipulatorSensorData",
-    "ControlInput",
+    "SensorSnapshot",
     "TelemetryBuffer",
     "TelemetryPublisher",
+    "PerceptionSource",
+    "PerceptionPublisher",
+    "PerceptionReceiver",
     "quaternionToEuler",
 ]

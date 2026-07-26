@@ -23,7 +23,7 @@ except Exception:  # pragma: no cover - 允许未安装 mujoco 时导入本模�
     mujoco = None
 
 from .. import _MODELS_DIR
-from ..utils.Messages import SensorData
+from ..utils.PerceptionBus import SensorSnapshot
 
 from .. import quaternionToEuler
 
@@ -189,12 +189,12 @@ class Multirotor:
         adr, dim = self._sensors[key]
         return np.array(self._data.sensordata[adr: adr + dim], dtype=float)
 
-    def get_state(self) -> SensorData:
-        """从自由关节 qpos/qvel 提取平台位姿与速度。"""
+    def get_state(self) -> SensorSnapshot:
+        """从自由关节 qpos/qvel 提取平台位姿与速度（帧同步快照）。"""
         self._require_bound()
         qpos = self._data.qpos[self._qpos_adr: self._qpos_adr + 7]
         qvel = self._data.qvel[self._qvel_adr: self._qvel_adr + 6]
-        return SensorData(
+        return SensorSnapshot(
             timestamp=float(self._data.time),
             timestep=float(self._model.opt.timestep),
             dronePosition=qpos[:3].copy(),

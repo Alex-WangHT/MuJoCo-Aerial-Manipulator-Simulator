@@ -22,7 +22,7 @@ except Exception:  # pragma: no cover
     mujoco = None
 
 from .. import _MODELS_DIR
-from ..utils.Messages import ManipulatorSensorData
+from ..utils.PerceptionBus import SensorSnapshot
 
 
 class Manipulator:
@@ -202,7 +202,7 @@ class Manipulator:
         adr, dim = self._sensors[local_key]
         return np.array(self._data.sensordata[adr: adr + dim], dtype=float)
 
-    def get_state(self) -> ManipulatorSensorData:
+    def get_state(self) -> SensorSnapshot:
         """提取机械臂传感快照（供帧同步发布给控制器线程）。
 
         含末端位置雅可比在本臂各关节 dof 上的切片 (3, n_joints)——
@@ -213,7 +213,7 @@ class Manipulator:
         body_id = int(self._model.site_bodyid[self._ee_site_id])
         jacp = np.zeros((3, self._model.nv))
         mujoco.mj_jac(self._model, self._data, jacp, None, ee_pos.copy(), body_id)
-        return ManipulatorSensorData(
+        return SensorSnapshot(
             timestamp=float(self._data.time),
             timestep=float(self._model.opt.timestep),
             jointPositions=self.get_joint_positions(),

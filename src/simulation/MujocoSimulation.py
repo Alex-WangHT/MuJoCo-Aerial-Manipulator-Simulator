@@ -10,7 +10,7 @@ try:
 except Exception:  # pragma: no cover
     mujoco = None
 
-from ..utils.Messages import SensorData
+from ..utils.PerceptionBus import SensorSnapshot
 from ..utils.Telemetry import TelemetryBuffer
 
 from .Environment import Environment
@@ -33,6 +33,7 @@ class MujocoSimulation(threading.Thread):
         realTimeFactor: float = 1.0,
         telemetryTarget: tuple[str, int] | None = None,
         telemetryRateHz: float = 100.0,
+        perceptionTarget: tuple[str, int] | None = None,
     ):
         super().__init__(daemon=True)
         if not isinstance(environment, Environment):
@@ -57,6 +58,10 @@ class MujocoSimulation(threading.Thread):
         self._rtf = max(1e-6, float(realTimeFactor))
         self._telemetryTarget = telemetryTarget          # (host, port)，None 关闭
         self._telemetryRateHz = max(1e-3, float(telemetryRateHz))
+        self._perceptionTarget = perceptionTarget        # (host, port)，None 关闭
+        self._perceptionSources: list = []               # PerceptionSource 列表
+        self._perceptionPublisher = None                 # PerceptionPublisher | None
+        self._perceptionDivisors: list[int] = []         # 各源抽稀因子（按物理帧计）
 
         self.env: Environment | None = environment       # _build 中完成合并
         self.uam: Robot | None = None                    # _build 中 attach 后获得
@@ -78,6 +83,18 @@ class MujocoSimulation(threading.Thread):
         """放行物理推进（控制器线程应在此之前构造并 start）。"""
         self._gate.set()
 
+    def add_perception_source(self, source) -> None:
+        """注册感知源（相机/雷达预留接口，物理启动前调用）。
+
+        ``source`` 为 :class:`~src.utils.PerceptionBus.PerceptionSource` 实例；
+        仿真线程按 ``source.rate_hz`` 折算的抽稀因子在帧边界调用其
+        ``capture(model, data)``，产出经 UDP 感知通道发往对端进程。
+        需构造时传入 ``perceptionTarget``，否则源注册后不会发送。
+        """
+        if not getattr(source, "name", None) or not callable(getattr(source, "capture", None)):
+            raise TypeError("add_perception_source: source 应为 PerceptionSource 实例")
+        self._perceptionSources.append(source)
+
     # ---------- 组装 ----------
 
     def _build(self) -> None:
@@ -88,7 +105,7 @@ class MujocoSimulation(threading.Thread):
         ``Environment.compile()``。
         """
         # Environment + AerialManipulator 合并打包（attach 内部会校验未编译）
-        self.env.attach_robot(self.uam)
+        self.uam = self.env.attach_robot(self._multirotor, self._manipulator)
 
         # 帧同步通道：控制器（独立线程）由外部在 wait_ready 后注册
         self.drone_channel = ControllerChannel()
@@ -106,6 +123,7 @@ class MujocoSimulation(threading.Thread):
         self._build()
         self._printDiagnostics()
         self._startTelemetryChannel()
+        self._startPerceptionChannel()
         self._ready.set()
 
         # 物理停放：等待外部接线（控制器构造 + start）完成后放行
@@ -124,6 +142,7 @@ class MujocoSimulation(threading.Thread):
             if self.arm_channel is not None:
                 self.arm_channel.close()
             self._stopTelemetryChannel()
+            self._stopPerceptionChannel()
         print("[MujocoSimulation] 仿真结束。")
 
     def stop(self) -> None:
@@ -154,9 +173,61 @@ class MujocoSimulation(threading.Thread):
             if publisher.dropped:
                 print(f"[MujocoSimulation] 遥测通道关闭：发送 {publisher.sent} 帧，丢弃 {publisher.dropped} 帧")
 
-    def _publishTelemetry(self, sensor: SensorData, u: np.ndarray) -> None:
+    # ---------- 跨进程感知通道（相机/雷达预留） ----------
+
+    def _startPerceptionChannel(self) -> None:
+        """启动 UDP 感知发布器并折算各源抽稀因子（独立线程，主循环零阻塞）。"""
+        if self._perceptionTarget is None:
+            if self._perceptionSources:
+                print("[MujocoSimulation] 已注册感知源但未配置 perceptionTarget，感知数据不发送。")
+            return
+        if not self._perceptionSources:
+            return
+        from ..utils.PerceptionBus import PerceptionPublisher  # 延迟导入
+
+        assert self.env is not None
+        host, port = self._perceptionTarget
+        dt = float(self.env.model.opt.timestep)
+        self._perceptionPublisher = PerceptionPublisher(host, port)
+        self._perceptionPublisher.start()
+        self._perceptionDivisors = [
+            max(1, int(round(1.0 / (dt * max(1e-3, float(src.rate_hz))))))
+            for src in self._perceptionSources
+        ]
+        rates = ", ".join(
+            f"{src.name}@{1.0 / (dt * div):.1f}Hz"
+            for src, div in zip(self._perceptionSources, self._perceptionDivisors)
+        )
+        print(f"[MujocoSimulation] 感知通道: udp://{host}:{port}（{rates}）")
+
+    def _stopPerceptionChannel(self) -> None:
+        if self._perceptionPublisher is not None:
+            publisher = self._perceptionPublisher
+            self._perceptionPublisher = None
+            publisher.stop()
+            if publisher.dropped_chunks:
+                print(f"[MujocoSimulation] 感知通道关闭：发送 {publisher.sent_frames} 帧，"
+                      f"丢弃 {publisher.dropped_chunks} 片")
+
+    def _publishPerception(self) -> None:
+        """按各源抽稀因子采集一帧感知数据并入队（put_nowait，永不阻塞主循环）。
+
+        ``capture`` 在仿真线程内执行（可访问 mjData）；源的异常只打印警告，
+        不影响物理推进。
+        """
+        assert self.env is not None
+        for src, div in zip(self._perceptionSources, self._perceptionDivisors):
+            if self._frameIndex % div:
+                continue
+            try:
+                payload, meta = src.capture(self.env.model, self.env.data)
+            except Exception as exc:  # noqa: BLE001 - 感知源故障不应击落物理循环
+                print(f"[MujocoSimulation] 感知源 '{src.name}' capture 异常: {exc}")
+                continue
+            self._perceptionPublisher.publish(src.name, payload, meta)
+
+    def _publishTelemetry(self, sensor: SensorSnapshot, u: np.ndarray) -> None:
         """按抽稀因子向另一进程发布一帧状态（put_nowait，永不阻塞主循环）。"""
-        self._frameIndex += 1
         if self._frameIndex % self._telemetryDivisor:
             return
         assert self.uam is not None
@@ -178,6 +249,7 @@ class MujocoSimulation(threading.Thread):
     def _frame(self) -> None:
         """单帧：快照发布 -> 控制器回执 -> 帧边界 flush -> 物理步进。"""
         assert self.env is not None and self.uam is not None
+        self._frameIndex += 1
         sensor = self.uam.multirotor.get_state()
 
         if self._telemetryBuffer is not None:
@@ -213,6 +285,8 @@ class MujocoSimulation(threading.Thread):
                 for name in self.uam.multirotor.rotor_names
             ])
             self._publishTelemetry(sensor, u)
+        if self._perceptionPublisher is not None:
+            self._publishPerception()
         self.env.step()
 
     def _launchViewer(self) -> None:
@@ -232,11 +306,15 @@ class MujocoSimulation(threading.Thread):
             self._pace(loop_start)
 
     def _pace(self, loop_start: float) -> None:
-        """按 realTimeFactor 把每帧对齐到物理步长的墙钟时间。"""
-        frame_wall = float(self.env.model.opt.timestep) / self._rtf
-        remaining = frame_wall - (time.perf_counter() - loop_start)
-        if remaining > 0:
-            time.sleep(remaining)
+        """按 realTimeFactor 把每帧对齐到物理步长的墙钟时间。
+
+        自旋等待（不用 sleep）：Windows 下次毫秒级 sleep 实际会睡 1ms 以上，
+        1 kHz 物理帧（预算 1ms）会被拖到 ~0.6x 实时；自旋有微秒级精度，
+        代价是配速期间占满一个核——实时仿真本就该独占一个核。
+        """
+        deadline = loop_start + float(self.env.model.opt.timestep) / self._rtf
+        while time.perf_counter() < deadline:
+            pass
 
     # ---------- 降级模式（无 mujoco） ----------
 
@@ -246,7 +324,7 @@ class MujocoSimulation(threading.Thread):
         position = np.zeros(3)
         euler = np.zeros(3)
         while not self._shutdownEvent.is_set():
-            sensor = SensorData(timestamp=timestamp, timestep=timestep)
+            sensor = SensorSnapshot(timestamp=timestamp, timestep=timestep)
             if self._telemetryBuffer is not None:
                 self._telemetryBuffer.append(timestamp, position, euler)
             time.sleep(timestep)
