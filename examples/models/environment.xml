@@ -1,0 +1,43 @@
+<mujoco model="flight_field">
+  <!--
+    MuJoCo 场景环境（Environment）：飞行场地。
+
+    本文件是“父模型”：由 src/Environment.py 加载，机器人组件（Multirotor +
+    可选 Manipulator 组合后的 spec）通过 mjSpec.attach 挂到 uam_spawn site 上
+    组合编译。
+
+    约定（供 src/Environment.py 按名称自省）：
+    - 机器人挂载点 site:  uam_spawn（attach_robot 以此为放置位置 attach）
+    - 障碍物 geom:        名称以 obstacle_ 前缀开头（位置/接触交互查询）
+    - 着陆台 geom:        landing_pad
+    - 地板 geom:          floor
+
+    注意：机器人模型（multirotor.xml / Manipulator.xml）不含场景元素；
+    地板、灯光、障碍物全部只属于本文件。
+  -->
+  <compiler angle="radian"/>
+  <option timestep="0.001" gravity="0 0 -9.81"/>
+
+  <asset>
+    <texture name="ground_grid" type="2d" builtin="checker" width="512" height="512" rgb1="0.38 0.56 0.88" rgb2="0.97 0.98 1.00"/>
+    <material name="ground_grid_mat" texture="ground_grid" texrepeat="10 10" texuniform="true" reflectance="0.08"/>
+    <material name="obstacle_mat" rgba="0.62 0.32 0.18 1"/>
+    <material name="pad_mat" rgba="0.15 0.55 0.35 1"/>
+  </asset>
+
+  <worldbody>
+    <light pos="0 0 4"/>
+    <geom name="floor" type="plane" size="10 10 0.02" material="ground_grid_mat"/>
+
+    <!-- 机器人出生点（世界原点；机体自身 MJCF 内的 1.5 m 初始高度由其模型决定） -->
+    <site name="uam_spawn" pos="0 0 0" size="0.05" rgba="0 0.8 0.8 0.6"/>
+
+    <!-- 障碍物：两根立柱 + 一个箱子 -->
+    <geom name="obstacle_pillar_a" type="cylinder" pos="1.5 0.5 0.5" size="0.12 0.5" material="obstacle_mat"/>
+    <geom name="obstacle_pillar_b" type="cylinder" pos="-1.2 -0.8 0.75" size="0.15 0.75" material="obstacle_mat"/>
+    <geom name="obstacle_box" type="box" pos="0.3 -1.5 0.2" size="0.25 0.25 0.2" material="obstacle_mat"/>
+
+    <!-- 着陆台 -->
+    <geom name="landing_pad" type="cylinder" pos="2.0 -1.0 0.02" size="0.4 0.02" material="pad_mat"/>
+  </worldbody>
+</mujoco>

@@ -1,0 +1,88 @@
+# MuJoCo 空中机械臂仿真器 —— 可安装 Python 包。
+#
+# 安装::
+#
+#     pip install -e .
+#
+# 或指定依赖::
+#
+#     pip install -e ".[dev]"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "UAMSim"
+version = "0.1.0"
+description = "MuJoCo 空中机械臂仿真器 —— 多旋翼 + 机械臂仿真与控制框架"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "wangh", email = "wangh@example.com" },
+]
+keywords = ["mujoco", "simulation", "uam", "aerial-manipulator", "robotics"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+dependencies = [
+    "numpy>=1.24",
+    "mujoco>=3.2",
+    "glfw>=2.7",
+    "matplotlib>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/wangh/MuJoCo-Aerial-Manipulator-Simulator"
+Repository = "https://github.com/wangh/MuJoCo-Aerial-Manipulator-Simulator"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["UAMSim*"]
+exclude = ["tests*", "examples*"]
+
+[tool.setuptools.package-data]
+# 模型文件已移至 examples/models/，不再打包进库内
+UAMSim = ["models/**/*"]
+
+# ---------- lint / format ----------
+
+[tool.black]
+line-length = 120
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
+ignore = ["E402", "E501", "B008"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+
+# ---------- pytest ----------
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
