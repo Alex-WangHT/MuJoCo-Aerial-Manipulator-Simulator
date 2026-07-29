@@ -158,7 +158,7 @@ ctrl.set_target(target=[0, 0, 2.0], kp=5.0)
 
 ## 详细文档
 
-使用指南、MJCF 命名约定、API 参考等详见 [`DOCUMENT.md`](DOCUMENT.md)。
+使用指南、MJCF 命名约定、API 参考等详见 [`docs/DOCUMENT.md`](docs/DOCUMENT.md)。
 
 ---
 
